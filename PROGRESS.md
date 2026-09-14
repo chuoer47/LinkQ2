@@ -14,11 +14,11 @@ Qwen3-8B + W4A16（自写 kernel）+ KV4 + draft-model 投机推理，decode-onl
 
 - [x] S0 脚手架：目录骨架 + docs 同步 + git init + 本文件（2026-09-14）
 - [x] S1 环境：conda 建 `qslab` env（py3.11 / torch 2.5.1+cu124 / transformers 4.57.6 / nvcc 12.4 / gcc-13），按 docs/02 配置单，装完跑验证命令（2026-09-14 全绿：nvcc 12.4 + gcc 13.4.0 + cuda_available True cap(8,9)。坑记录：清华 nvidia channel 404 → 用官方 URL；pip 大包须 nohup 后台+轮询）
-- [ ] S2 基础包骨架：pyproject + qslab/config.py + adapters/tokenizer.py（能 tokenize 一个字符串）
-- [ ] S3 模型加载：qslab/model/loader.py（safetensors 读取 + 权重映射），transformers 建模（Qwen3ForCausalLM）加载 Qwen3-1.7B
-- [ ] S4 patched.py：Qwen3Attention 替换子类 + KV cache 容器接入（fp16 实现先行）
-- [ ] S5 engine.py：decode-only 主循环（input 512 → decode 128）
-- [ ] S6 正确性验证：与 transformers 原生 generate 对比，固定 seed token 序列一致（oracle 对齐）
+- [x] S2 基础包骨架：pyproject + qslab/config.py + adapters/tokenizer.py（tokenize 验证通过）（2026-09-14）
+- [x] S3 模型加载：qslab/model/loader.py（safetensors 读取 + 权重映射），transformers 建模加载 Qwen3-1.7B fp16 验证通过（2026-09-14）
+- [x] S4 patched.py：Qwen3Attention 替换子类 + KV cache 容器接入（fp16 实现先行）（2026-09-14）
+- [x] S5 engine.py：decode-only 主循环（2026-09-14；RoPE cache_position 修复）
+- [x] S6 正确性验证：与 transformers 原生 generate 对比，3 prompts×48tok token 序列完全一致 ALL_MATCH（2026-09-14）
 - [x] S7 基线测量：bench_throughput.py 跑 1.7B FP16 tokens/s + PPL（WikiText-2），结果 json 进 results/，对照验收线（PPL 与参考实现误差 <0.1）—— **吞吐 42.08 tok/s median；PPL 26.48（16 docs）；正确性以 token 级一致覆盖验收线**（2026-09-14）
 - [x] S8 notes/M0-基线.md：实验心得（2026-09-14）
 
