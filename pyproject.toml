@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qslab"
+version = "0.1.0"
+description = "Lightweight W4A16+KV4 LLM inference engine (qserve-lab)"
+requires-python = ">=3.11"
+dependencies = [
+    "torch==2.5.1",
+    "numpy<2.1",
+    "safetensors",
+]
+
+[project.optional-dependencies]
+# adapters layer only — qslab core must NOT import these
+adapters = ["transformers==4.57.6", "accelerate", "tokenizers"]
+
+[tool.setuptools.packages.find]
+include = ["qslab*"]
