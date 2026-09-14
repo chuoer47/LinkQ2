@@ -1,0 +1,11 @@
+# models & builds
+models/
+builds/
+*.so
+*.bin
+__pycache__/
+*.egg-info/
+.ipynb_checkpoints/
+
+# results stay tracked, but big intermediate files excluded
+results/**/*.pt
