@@ -29,15 +29,18 @@ class PatchedQwen3Attention(Qwen3Attention):
     """
 
     def __init__(self, parent_attn: Qwen3Attention, layer_idx: int, engine_cache: FP16KVCache):
-        # reuse parent's config & weights without re-creating projections
+        # Bypass parent's __init__ (it would allocate new projections); we
+        # instead build a bare nn.Module and steal the parent's submodules.
+        # (4.57: head counts live on config, not the module — pull from config)
+        torch.nn.Module.__init__(self)
         self.config = parent_attn.config
         self.layer_idx = layer_idx
         self.head_dim = parent_attn.head_dim
-        self.num_attention_heads = parent_attn.num_attention_heads
-        self.num_key_value_heads = parent_attn.num_key_value_heads
+        self.num_attention_heads = self.config.num_attention_heads
+        self.num_key_value_heads = self.config.num_key_value_heads
         self.num_key_value_groups = parent_attn.num_key_value_groups
-        self.max_position_embeddings = parent_attn.max_position_embeddings
-        self.rope_theta = parent_attn.rope_theta
+        self.max_position_embeddings = getattr(self.config, "max_position_embeddings", None)
+        self.rope_theta = getattr(self.config, "rope_theta", None)
         self.is_causal = parent_attn.is_causal
         self.attention_dropout = parent_attn.attention_dropout
         self.scaling = parent_attn.scaling
@@ -49,8 +52,7 @@ class PatchedQwen3Attention(Qwen3Attention):
         self.o_proj = parent_attn.o_proj
         self.q_norm = parent_attn.q_norm
         self.k_norm = parent_attn.k_norm
-        self.sliding_window = getattr(parent_attn, "sliding_window", None)
-        self.rope_kwargs = {}
+        self.sliding_window = parent_attn.sliding_window
 
         # engine-managed cache (one per layer, owned by the engine loop)
         self.engine_cache = engine_cache
