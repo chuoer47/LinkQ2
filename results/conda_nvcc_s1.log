@@ -1,0 +1,25 @@
+Channels:
+ - nvidia
+ - defaults
+Platform: linux-64
+Collecting package metadata (repodata.json): - \ | / - \ | done
+Solving environment: - \ done
+
+## Package Plan ##
+
+  environment location: <conda-env>
+
+  added / updated specs:
+    - cuda-nvcc=12.4
+
+
+The following NEW packages will be INSTALLED:
+
+  cuda-nvcc          nvidia/linux-64::cuda-nvcc-12.4.131-0 
+
+
+
+Downloading and Extracting Packages: ...working... done
+Preparing transaction: / done
+Verifying transaction: \ done
+Executing transaction: / done

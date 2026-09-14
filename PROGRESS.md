@@ -13,7 +13,7 @@ Qwen3-8B + W4A16（自写 kernel）+ KV4 + draft-model 投机推理，decode-onl
 ### M0 子任务清单
 
 - [x] S0 脚手架：目录骨架 + docs 同步 + git init + 本文件（2026-09-14）
-- [ ] S1 环境：conda 建 `qslab` env（py3.11 / torch 2.5.1+cu124 / transformers 4.57.6 / nvcc 12.4 / gcc-13），按 docs/02 配置单，装完跑验证命令
+- [x] S1 环境：conda 建 `qslab` env（py3.11 / torch 2.5.1+cu124 / transformers 4.57.6 / nvcc 12.4 / gcc-13），按 docs/02 配置单，装完跑验证命令（2026-09-14 全绿：nvcc 12.4 + gcc 13.4.0 + cuda_available True cap(8,9)。坑记录：清华 nvidia channel 404 → 用官方 URL；pip 大包须 nohup 后台+轮询）
 - [ ] S2 基础包骨架：pyproject + qslab/config.py + adapters/tokenizer.py（能 tokenize 一个字符串）
 - [ ] S3 模型加载：qslab/model/loader.py（safetensors 读取 + 权重映射），transformers 建模（Qwen3ForCausalLM）加载 Qwen3-1.7B
 - [ ] S4 patched.py：Qwen3Attention 替换子类 + KV cache 容器接入（fp16 实现先行）
@@ -24,7 +24,7 @@ Qwen3-8B + W4A16（自写 kernel）+ KV4 + draft-model 投机推理，decode-onl
 
 ### M0 断点
 
-（无——S1 环境搭建中）
+（无——S2 基础包骨架进行中）
 
 ## 已完成里程碑
 
