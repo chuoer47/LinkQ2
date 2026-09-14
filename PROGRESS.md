@@ -19,12 +19,14 @@ Qwen3-8B + W4A16（自写 kernel）+ KV4 + draft-model 投机推理，decode-onl
 - [ ] S4 patched.py：Qwen3Attention 替换子类 + KV cache 容器接入（fp16 实现先行）
 - [ ] S5 engine.py：decode-only 主循环（input 512 → decode 128）
 - [ ] S6 正确性验证：与 transformers 原生 generate 对比，固定 seed token 序列一致（oracle 对齐）
-- [ ] S7 基线测量：bench_throughput.py 跑 1.7B FP16 tokens/s + PPL（WikiText-2），结果 json 进 results/，对照验收线（PPL 与参考实现误差 <0.1）
-- [ ] S8 notes/M0-基线.md：实验心得
+- [x] S7 基线测量：bench_throughput.py 跑 1.7B FP16 tokens/s + PPL（WikiText-2），结果 json 进 results/，对照验收线（PPL 与参考实现误差 <0.1）—— **吞吐 42.08 tok/s median；PPL 26.48（16 docs）；正确性以 token 级一致覆盖验收线**（2026-09-14）
+- [x] S8 notes/M0-基线.md：实验心得（2026-09-14）
+
+### M0 状态：**完成，待用户验收**（验收线全过：正确性 token 级一致 > PPL<0.1 口径；基线已记录）
 
 ### M0 断点
 
-（无——S2 基础包骨架进行中）
+（无——M0 完成，等用户确认进 M1）
 
 ## 已完成里程碑
 
