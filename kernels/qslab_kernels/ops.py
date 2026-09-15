@@ -35,7 +35,7 @@ def _get_mod():
 def w4a16_gemm(qfp: torch.Tensor, scale: torch.Tensor, x: torch.Tensor,
                group_size: int = 128) -> torch.Tensor:
     """y = x @ dequant(qfp, scale)^T. qfp [N, K/8] uint32, scale [N, K/g] fp16,
-    x [M, K] fp16 -> y [M, N] fp32."""
+    x [M, K] fp16 -> y [M, N] fp16 (accumulated in fp32 inside the kernel)."""
     assert x.dtype == torch.float16 and scale.dtype == torch.float16
     assert qfp.dtype == torch.uint32
     mod = _get_mod()

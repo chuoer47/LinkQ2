@@ -16,7 +16,7 @@ __device__ __forceinline__ float dequant_nibble(uint32_t word, int nib,
 __global__ void w4a16_gemm_kernel(const uint32_t* __restrict__ qfp,
                                   const __half* __restrict__ scale,
                                   const __half* __restrict__ x,
-                                  float* __restrict__ y,
+                                  __half* __restrict__ y,
                                   int M, int N, int K, int group_size) {
     const int n = blockIdx.x * (blockDim.x >> 5) + (threadIdx.x >> 5);
     const int m = blockIdx.y;
@@ -52,7 +52,7 @@ __global__ void w4a16_gemm_kernel(const uint32_t* __restrict__ qfp,
     }
     for (int off = 16; off > 0; off >>= 1)
         acc += __shfl_down_sync(0xffffffffu, acc, off);
-    if (lane == 0) y[(size_t)m * N + n] = acc;
+    if (lane == 0) y[(size_t)m * N + n] = __float2half(acc);
 }
 
 torch::Tensor w4a16_gemm(torch::Tensor qfp, torch::Tensor scale,
@@ -65,13 +65,13 @@ torch::Tensor w4a16_gemm(torch::Tensor qfp, torch::Tensor scale,
     const int K = x.size(-1);
     const int M = x.dim() == 2 ? x.size(0) : 1;
     auto x2 = x.dim() == 2 ? x : x.unsqueeze(0);
-    auto y = torch::empty({M, N}, x.options().dtype(torch::kFloat));
+    auto y = torch::empty({M, N}, x.options());          // fp16 out: no cast op
     dim3 grid((N + 3) / 4, M);
     w4a16_gemm_kernel<<<grid, 128>>>(
         reinterpret_cast<const uint32_t*>(qfp.data_ptr<uint32_t>()),
         reinterpret_cast<const __half*>(scale.data_ptr<at::Half>()),
         reinterpret_cast<const __half*>(x2.data_ptr<at::Half>()),
-        y.data_ptr<float>(), M, N, K, (int)group_size);
+        reinterpret_cast<__half*>(y.data_ptr<at::Half>()), M, N, K, (int)group_size);
     return y;
 }
 
