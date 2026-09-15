@@ -22,12 +22,25 @@ Qwen3-8B + W4A16（自写 kernel）+ KV4 + draft-model 投机推理，decode-onl
 - [x] M1-S8 notes/M1a-软件链路.md（2026-09-15）
 - [ ] M1-S9（M1b）kernel：**进行中**——w4a16_gemm.cu 第一版编译跑通（sm_89，gcc-13 链路 4 个 leetcuda 坑全踩通）。首测：大形状 (6144,12288) 达 **3.59×** vs fp16 GEMV；小形状 (2048,2048) 仅 0.90×（warp 并行度不足）。下一步：小形状优化（block 内多 warp / 向量化读）
 - [x] M1-S9（M1b）kernel：w4a16_gemm v5 完成。kernel 级 1.45/1.64/1.77×（主要 decode 形状达标），6144×12288 1.14× 未达；数值 rel err 7e-8；e2e 0.95×（结构性打平，8B 时收益显现）；notes/M1b-kernel.md（2026-09-15）
-- [ ] M1-S10 决策点：PPL +1.24 vs 0.3 线 gap——**等用户裁决**（选项见下）
+- [x] M1-S10 决策点：**用户裁决 (b)——接受 PPL +1.24 记录分析，M4 的 8B 复测**（2026-09-15）
 
-### M1 断点
+### M1 状态：**完成，用户验收通过（2026-09-15，S10 选 b）**
 
-**M1 全部子任务完成，停在里程碑验收点。** 验收数据：PPL 27.72 (+1.24 vs FP16 26.48) / kernel 1.45~1.77×（主形状）/ token 级对齐全 PASS / 打包 5.3× 压缩 / e2e 0.95×。
-S10 选项：(a) 扩大校准集重跑争取 PPL<1；(b) 接受 +1.24 记录分析（推荐，8B M4 时复测）；(c) 调验收线。
+## 当前里程碑：**M2 — KV cache 4bit 量化**
+
+### M2 子任务清单
+
+- [ ] M2-S0 design-m2：KV4 方案定稿（K per-channel / V per-token 不对称，前 N 层 FP16，读时反量化先行）
+- [ ] M2-S1 kv4_plan.py：离线测每层 KV 离群程度 → 生成保 FP16 层清单，写进打包 config
+- [ ] M2-S2 kv_cache.py：KV8Cache / KV4Cache 实现（量化写入 + 读时反量化接口）
+- [ ] M2-S3 PatchedQwen3Attention 接量化 cache（per-layer 可选精度）
+- [ ] M2-S4 正确性：KV4 引擎 vs FP16 KV 引擎，PPL 对比（验收线 <0.5）+ 显存对比（≥3.5×）
+- [ ] M2-S5 NIAH 32K：召回率对比（验收线降幅 <5%）
+- [ ] M2-S6 notes/M2-kv4.md
+
+### M2 断点
+
+（开工——先写 design-m2）
 
 ## 已完成里程碑
 
