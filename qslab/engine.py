@@ -5,10 +5,12 @@ The engine owns:
 - the per-layer KV caches
 - the decode loop: prefill (one forward over the prompt) then token-by-token decode
 
-M3 will extend this loop with draft/verify scheduling; the loop is written
-ours from day one so that extension is natural.
+M2: kv_mode selects cache precision per layer ("fp16" | "kv8" | "kv4"), with
+a plan json optionally overriding which layers stay fp16 (kv4_plan.json).
 """
 from __future__ import annotations
+
+import json
 
 import torch
 
@@ -18,7 +20,8 @@ from qslab.model.patched import patch_model
 
 
 class QslabEngine:
-    def __init__(self, cfg: EngineConfig):
+    def __init__(self, cfg: EngineConfig, kv_mode: str = "fp16",
+                 kv_plan_path: str | None = None):
         self.cfg = cfg
         self.device = cfg.device
         self.dtype = getattr(torch, cfg.dtype)
@@ -26,7 +29,26 @@ class QslabEngine:
         self.model_cfg = load_model_config(cfg.model_path)
         self.model = load_reference_model(cfg.model_path, device=self.device)
 
-        # replace attention with engine-managed cache version
+        # per-layer cache classes (M2): default all fp16, plan overrides
+        from qslab.cache.kv_cache import FP16KVCache, KV8Cache, KV4Cache
+        classes = {"fp16": FP16KVCache, "kv8": KV8Cache, "kv4": KV4Cache}
+        assert kv_mode in classes, f"unknown kv_mode {kv_mode}"
+        fp16_layers: set[int] = set()
+        kv_group = 64
+        if kv_plan_path:
+            plan = json.loads(open(kv_plan_path).read())
+            fp16_layers = set(plan.get("kv_fp16_layers", []))
+            kv_group = plan.get("group_size", 64)
+
+        cache_classes = []
+        for i in range(self.model_cfg.num_hidden_layers):
+            if kv_mode == "fp16" or i in fp16_layers:
+                cache_classes.append(FP16KVCache)
+            else:
+                cache_classes.append(classes[kv_mode])
+
+        # replace attention with engine-managed cache version; patch_model
+        # accepts a factory so each layer gets its own cache class
         self.kv_caches = patch_model(
             self.model,
             num_layers=self.model_cfg.num_hidden_layers,
@@ -34,6 +56,14 @@ class QslabEngine:
             head_dim=self.model_cfg.head_dim,
             max_len=self.model_cfg.max_position_embeddings,
             device=self.device,
+            cache_factory=lambda i: cache_classes[i](
+                batch=1,
+                num_kv_heads=self.model_cfg.num_key_value_heads,
+                head_dim=self.model_cfg.head_dim,
+                max_len=self.model_cfg.max_position_embeddings,
+                device=self.device,
+                **({} if cache_classes[i] is FP16KVCache else {"group": kv_group}),
+            ),
         )
         self.model.eval()
 

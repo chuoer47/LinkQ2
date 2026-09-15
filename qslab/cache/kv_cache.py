@@ -61,7 +61,13 @@ class FP16KVCache(BaseKVCache):
 
 def _quant_sym(x: torch.Tensor, g: int):
     """Symmetric group-wise quantize last dim by g: -> int4 in uint32 packs,
-    fp16 scale. x [..., N] with N % g == 0."""
+    fp16 scale. Handles a tail group smaller than g (scale covers actual size).
+    Returns (packs uint32 [..., N_pad/8], scale fp16 [..., ceil(N/g)], N_orig).
+    """
+    N = x.shape[-1]
+    Np = ((N + g - 1) // g) * g
+    if Np != N:
+        x = torch.nn.functional.pad(x, (0, Np - N))
     shape = x.shape
     xg = x.to(torch.float32).reshape(*shape[:-1], shape[-1] // g, g)
     amax = xg.abs().amax(dim=-1, keepdim=True)
@@ -73,7 +79,7 @@ def _quant_sym(x: torch.Tensor, g: int):
     for nib in range(PACK_G):
         packs |= qn[..., nib::PACK_G].to(torch.int64) << (4 * nib)
     qfp = packs.to(torch.int32).view(torch.uint32)
-    return qfp, scale.squeeze(-1).to(torch.float16)
+    return qfp, scale.squeeze(-1).to(torch.float16), N
 
 
 def _dequant_sym(qfp: torch.Tensor, scale: torch.Tensor, g: int) -> torch.Tensor:
@@ -161,26 +167,41 @@ class KV4Cache(BaseKVCache):
     def update(self, k_new, v_new, start=None):
         T = k_new.shape[2]
         start = self.len if start is None else start
-        # K: quantize per-channel along token axis -> transpose to [B,H,D,T],
-        # groups of `group` consecutive tokens share a scale
+        # K: per-channel along token axis. To support arbitrary T (esp. decode
+        # T=1), quantize the tail of the CURRENT packed word against the
+        # existing partial word: accumulate tokens into a staging buffer of
+        # group-aligned length, then re-pack only the affected span.
         kt = k_new.to(torch.float32).transpose(-1, -2)   # [B,H,D,T]
-        assert T % self.group == 0, "T must be multiple of group for K"
-        kq, ks = _quant_sym(kt, self.group)
-        self.k_q[:, :, :, start // PACK_G:(start + T) // PACK_G] = kq
-        self.k_s[:, :, :, start // self.group:(start + T) // self.group] = ks
-        # V: per-token along D
-        vq, vs = _quant_sym(v_new.to(torch.float32), self.group)
+        B_, H_, D_ = kt.shape[0], kt.shape[1], kt.shape[2]
+        # staging: full fp16 K buffer view (rebuilt each update — simple, ok
+        # for M2 read-time-dequant scope; kernel path in M2b removes this)
+        if not hasattr(self, "_k_stage"):
+            self._k_stage = torch.zeros(B_, H_, D_, self.max_len,
+                                        device=self.device, dtype=torch.float32)
+        self._k_stage[:, :, :, start:start + T] = kt
+        Lp = ((start + T + self.group - 1) // self.group) * self.group
+        kq, ks, _ = _quant_sym(self._k_stage[:, :, :, :Lp], self.group)
+        self.k_q = kq
+        self.k_s = ks
+        # V: per-token along D (T-agnostic)
+        vq, vs, _ = _quant_sym(v_new.to(torch.float32), self.group)
         self.v_q[:, :, start:start + T] = vq
         self.v_s[:, :, start:start + T] = vs
         if start + T > self.len:
             self.len = start + T
-        L = ((self.len + self.group - 1) // self.group) * self.group
-        k = _dequant_sym(self.k_q[:, :, :, :L // PACK_G],
-                         self.k_s[:, :, :, :L // self.group], self.group)
+        Lp2 = ((self.len + self.group - 1) // self.group) * self.group
+        k = _dequant_sym(self.k_q[:, :, :, :Lp2 // PACK_G],
+                         self.k_s[:, :, :, :Lp2 // self.group], self.group)
         k = k.transpose(-1, -2)[..., :self.len, :]        # back to [B,H,T,D]
         v = _dequant_sym(self.v_q[:, :, :self.len],
                          self.v_s[:, :, :self.len], self.group)
         return k.contiguous(), v
+
+    def reset(self):
+        """Clear state (K staging buffer included)."""
+        self.len = 0
+        if hasattr(self, "_k_stage"):
+            self._k_stage.zero_()
 
     @property
     def memory_bytes(self) -> int:

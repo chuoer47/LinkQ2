@@ -116,20 +116,23 @@ def repeat_kv(hidden: torch.Tensor, n_rep: int) -> torch.Tensor:
 
 
 def patch_model(model: torch.nn.Module, num_layers: int, num_kv_heads: int,
-                head_dim: int, max_len: int, device: str) -> list[FP16KVCache]:
+                head_dim: int, max_len: int, device: str,
+                cache_factory=None) -> list:
     """Replace every layer's self_attn with PatchedQwen3Attention.
 
+    cache_factory(i) -> cache instance; defaults to FP16KVCache per layer.
     Returns the list of engine caches (one per layer) so the engine loop
     owns the cache lifecycle.
     """
-    from types import SimpleNamespace
-
-    caches: list[FP16KVCache] = []
+    caches: list = []
     layers = model.model.layers
     for i, layer in enumerate(layers):
         parent = layer.self_attn
-        cache = FP16KVCache(batch=1, num_kv_heads=num_kv_heads, head_dim=head_dim,
-                            max_len=max_len, device=device)
+        if cache_factory is None:
+            cache = FP16KVCache(batch=1, num_kv_heads=num_kv_heads, head_dim=head_dim,
+                                max_len=max_len, device=device)
+        else:
+            cache = cache_factory(i)
         patched = PatchedQwen3Attention(parent, layer_idx=i, engine_cache=cache)
         layer.self_attn = patched
         caches.append(cache)
