@@ -92,40 +92,36 @@ def clip_search_quantize(w: torch.Tensor, x_absmean: torch.Tensor | None = None,
 def awq_find_scales(w: torch.Tensor, x_absmean: torch.Tensor,
                     group_size: int = 128, n_grid: int = 20,
                     max_shrink: float = 1.0) -> torch.Tensor:
-    """AWQ per-channel scaling search. For each candidate shrink ratio a,
-    s = x^a (mean-normalized); quantize W diag(s) and evaluate the output
-    error of the equivalent transform (w_q/s @ diag(x)). Pick the best s
-    PER INPUT CHANNEL independently (s is a shared vector per candidate a,
-    and we select the candidate a per channel via per-channel error sums).
-
-    Simpler faithful variant: evaluate total error per candidate and take
-    the best candidate's s vector globally. To allow per-channel selection
-    we track per-channel err [O] summed over rows -> pick argmin a per
-    column via stacking candidates.
-    """
+    """AWQ per-channel scaling search: candidates s = mean-norm(x^a); select
+    the best candidate PER GROUP of input channels (per-group error sums),
+    assemble s [I] from per-group winners."""
     x = x_absmean.to(torch.float32) + 1e-6
     w32 = w.to(torch.float32)
     O, I = w.shape
-    errs = []          # per candidate: [O, I] output err
+    G = I // group_size
+    errs = []          # per candidate: [G] group error sums
     s_list = []
     for i in range(n_grid):
         ratio = 1.0 - i * (max_shrink / n_grid)
         s = (x ** ratio)
         s = s / s.mean()
         w_scaled = w32 * s[None, :]
-        wg = w_scaled.view(O, I // group_size, group_size)
+        wg = w_scaled.view(O, G, group_size)
         amax = wg.abs().amax(dim=-1, keepdim=True)
         scale = (amax / 7.0).clamp_min(1e-12)
         q = torch.clamp(torch.round(wg / scale), -8, 7)
         w_q = (q * scale).view(O, I)
         err = ((w_q / s[None, :]) - w32) * x[None, :]
-        errs.append(err.pow(2))
+        errs.append(err.pow(2).view(O, G, group_size).sum(dim=(0, 2)))  # [G]
         s_list.append(s)
-    errs = torch.stack(errs)                 # [n_grid, O, I]
+    errs = torch.stack(errs)                 # [n_grid, G]
     s_stack = torch.stack(s_list)            # [n_grid, I]
-    total_per_cand = errs.sum(dim=(1, 2))    # [n_grid]
-    best = int(total_per_cand.argmin().item())
-    return s_list[best]
+    best_cand = errs.argmin(dim=0)           # [G]
+    s_out = torch.empty(I, device=w.device)
+    for g in range(G):
+        s_out[g * group_size:(g + 1) * group_size] = s_stack[best_cand[g],
+                                                             g * group_size:(g + 1) * group_size]
+    return s_out
 
 
 @torch.no_grad()
