@@ -152,6 +152,7 @@ class KV4Cache(BaseKVCache):
                  group: int = 64):
         super().__init__(batch, num_kv_heads, head_dim, max_len, device)
         self.group = group
+        self._k_tail = None                      # partial-group staging [B,H,D,tail]
         D, L = head_dim, max_len
         # K transposed: [B, H, D, L/8] uint32 packs + scale [B, H, D, L/g]
         self.k_q = torch.zeros(batch, num_kv_heads, D, L // PACK_G,
@@ -173,35 +174,49 @@ class KV4Cache(BaseKVCache):
         # group-aligned length, then re-pack only the affected span.
         kt = k_new.to(torch.float32).transpose(-1, -2)   # [B,H,D,T]
         B_, H_, D_ = kt.shape[0], kt.shape[1], kt.shape[2]
-        # staging: full fp16 K buffer view (rebuilt each update — simple, ok
-        # for M2 read-time-dequant scope; kernel path in M2b removes this)
-        if not hasattr(self, "_k_stage"):
-            self._k_stage = torch.zeros(B_, H_, D_, self.max_len,
-                                        device=self.device, dtype=torch.float32)
-        self._k_stage[:, :, :, start:start + T] = kt
-        Lp = ((start + T + self.group - 1) // self.group) * self.group
-        kq, ks, _ = _quant_sym(self._k_stage[:, :, :, :Lp], self.group)
-        self.k_q = kq
-        self.k_s = ks
+        # K per-channel along token axis with arbitrary T: only the LAST
+        # partial group needs re-quantization with new tokens merged in.
+        # Full groups [0, n_full*g) are already packed and immutable.
+        g = self.group
+        n_full = start // g                      # complete groups before this update
+        tail = start - n_full * g                # tokens already in the partial group
+        kq_cols = start // PACK_G                # pack offset (groups of 8 tokens)
+        if tail > 0:
+            # re-quantize the partial group + new tokens together
+            prev_tail = self._k_tail             # [B,H,D,tail] fp32
+            merged = torch.cat([prev_tail, kt], dim=-1)     # [B,H,D,tail+T]
+        else:
+            merged = kt
+        Mg = merged.shape[-1]
+        n_new_full = Mg // g                     # full groups we can pack now
+        new_tail = Mg - n_new_full * g
+        if n_new_full > 0:
+            mq = merged[:, :, :, :n_new_full * g]
+            kq, ks, _ = _quant_sym(mq, g)
+            self.k_q[:, :, :, kq_cols:kq_cols + n_new_full * g // PACK_G] = kq
+            self.k_s[:, :, :, n_full:n_full + n_new_full] = ks
+            kq_cols += n_new_full * g // PACK_G
+            n_full += n_new_full
+        # stash remaining partial group for the next update
+        self._k_tail = merged[:, :, :, n_new_full * g:] if new_tail > 0 else None
         # V: per-token along D (T-agnostic)
         vq, vs, _ = _quant_sym(v_new.to(torch.float32), self.group)
         self.v_q[:, :, start:start + T] = vq
         self.v_s[:, :, start:start + T] = vs
         if start + T > self.len:
             self.len = start + T
-        Lp2 = ((self.len + self.group - 1) // self.group) * self.group
+        Lp2 = ((self.len + g - 1) // g) * g
         k = _dequant_sym(self.k_q[:, :, :, :Lp2 // PACK_G],
-                         self.k_s[:, :, :, :Lp2 // self.group], self.group)
+                         self.k_s[:, :, :, :Lp2 // g], g)
         k = k.transpose(-1, -2)[..., :self.len, :]        # back to [B,H,T,D]
         v = _dequant_sym(self.v_q[:, :, :self.len],
                          self.v_s[:, :, :self.len], self.group)
         return k.contiguous(), v
 
     def reset(self):
-        """Clear state (K staging buffer included)."""
+        """Clear state (K tail staging included)."""
         self.len = 0
-        if hasattr(self, "_k_stage"):
-            self._k_stage.zero_()
+        self._k_tail = None
 
     @property
     def memory_bytes(self) -> int:

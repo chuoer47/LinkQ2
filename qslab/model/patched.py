@@ -81,12 +81,15 @@ class PatchedQwen3Attention(Qwen3Attention):
         k_rep = repeat_kv(k_full, self.num_key_value_groups)
         v_rep = repeat_kv(v_full, self.num_key_value_groups)
         attn_weights = torch.matmul(query_states, k_rep.transpose(2, 3)) * self.scaling
-        # causal mask: query at position t attends to [0..t]
+        # causal mask: query at global position p_q attends keys at p_k <= p_q.
+        # Works for both decode (T_q=1, cache holds history) and chunked
+        # prefill (T_q=chunk, cache holds previous chunks).
         T_q = query_states.shape[2]
         T_k = k_full.shape[2]
-        kv_start = T_k - T_q
-        positions = torch.arange(kv_start, T_k, device=attn_weights.device)
-        causal = (positions[None, :] <= positions[:, None] + kv_start)  # [T_q, T_k]
+        kv_start = T_k - T_q                       # global pos of first query
+        q_pos = torch.arange(kv_start, T_k, device=attn_weights.device)   # [T_q]
+        k_pos = torch.arange(0, T_k, device=attn_weights.device)          # [T_k]
+        causal = k_pos[None, :] <= q_pos[:, None]                         # [T_q, T_k]
         attn_weights = attn_weights + torch.where(
             causal, 0.0, torch.finfo(attn_weights.dtype).min
         )

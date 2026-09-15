@@ -82,6 +82,21 @@ class QslabEngine:
         return out.logits[:, -1, :]
 
     @torch.inference_mode()
+    def prefill_chunked(self, input_ids: list[int], chunk: int = 4096) -> torch.Tensor:
+        """Chunked prefill for long contexts: feed input in `chunk`-sized
+        blocks so eager attention's O(T^2) intermediate never explodes.
+        Each block attends to all previous blocks via the engine caches.
+        Returns logits of the last position."""
+        last_logits = None
+        for b0 in range(0, len(input_ids), chunk):
+            piece = input_ids[b0:b0 + chunk]
+            x = torch.tensor([piece], device=self.device)
+            cache_pos = torch.arange(b0, b0 + len(piece), device=self.device)
+            out = self.model(input_ids=x, cache_position=cache_pos, use_cache=False)
+            last_logits = out.logits[:, -1, :]
+        return last_logits
+
+    @torch.inference_mode()
     def decode_step(self, token_id: int, start_pos: int) -> torch.Tensor:
         """One decode step: feed the last token, read KV from engine caches.
 
@@ -103,6 +118,24 @@ class QslabEngine:
         self.reset_cache()
         max_new = max_new_tokens or self.cfg.max_new_tokens
         logits = self.prefill(input_ids)
+        next_tok = int(logits.argmax(dim=-1))
+        generated = [next_tok]
+
+        for _ in range(max_new - 1):
+            if eos_id is not None and next_tok == eos_id:
+                break
+            logits = self.decode_step(next_tok, start_pos=len(input_ids) + len(generated) - 1)
+            next_tok = int(logits.argmax(dim=-1))
+            generated.append(next_tok)
+        return generated
+
+    @torch.inference_mode()
+    def generate_chunked(self, input_ids: list[int], max_new_tokens: int | None = None,
+                         eos_id: int | None = None, chunk: int = 4096) -> list[int]:
+        """Greedy decode with chunked prefill (long-context safe)."""
+        self.reset_cache()
+        max_new = max_new_tokens or self.cfg.max_new_tokens
+        logits = self.prefill_chunked(input_ids, chunk=chunk)
         next_tok = int(logits.argmax(dim=-1))
         generated = [next_tok]
 
