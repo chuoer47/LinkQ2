@@ -22,8 +22,9 @@
 
 __device__ __forceinline__ float dequant_nibble(uint32_t word, int nib,
                                                 float scale) {
-    // branch-free: (nibble - 8) covers [-8, 7] exactly
-    int q = static_cast<int>((word >> (4 * nib)) & 0xF) - 8;
+    // nibble encodes q in [-8,7] as (q & 0xF); decode: (q ^ 8) - 8
+    int q = static_cast<int>((word >> (4 * nib)) & 0xF);
+    q = (q ^ 8) - 8;
     return static_cast<float>(q) * scale;
 }
 
@@ -61,7 +62,10 @@ __global__ void w4a16_gemm_kernel(const uint32_t* __restrict__ qfp,
             cur_group = gidx;
             float s = __half2float(row_scale[gidx]);
             #pragma unroll
-            for (int v = 0; v < 16; ++v) my_lut[v] = (float)(v - 8) * s;
+            for (int v = 0; v < 16; ++v) {
+                int q = (v ^ 8) - 8;               // nibble -> [-8, 7]
+                my_lut[v] = (float)q * s;
+            }
         }
         __syncwarp();
         const uint4 pack = *reinterpret_cast<const uint4*>(row_qfp + c * 4);
