@@ -66,23 +66,28 @@ def load_w4_model(model_path: Path | str, device: str = "cuda:0") -> torch.nn.Mo
     """Load a qslab_w4_v1 directory: rebuild the transformers model, replace
     quantized Linears' weights with dequantized fp16 (M1a software path).
 
-    The backbone modules/structure stay transformers-owned; only weights swap.
+    For algo=awq, packed weights carry W' = W diag(s); activation scaling is
+    folded back here: the previous op's output scale must be divided by s.
+    We implement this by wrapping each quantized Linear with an input-scaling
+    forward (x / s) — exact for the first quantized layer after any op, and
+    composed correctly because scaling only applies at quantized-layer entry.
     Returns an eval-mode fp16 model functionally equivalent to the quantized
     checkpoint (this is what the W4A16 kernel path must match in M1b).
     """
+    import json as _json
     from quantizer.packfmt import load_qslab_w4, unpack_w4
 
     model_path = Path(model_path)
     config, st, _calib = load_qslab_w4(model_path)
-    if config["algo"] != "rtn":
-        # AWQ act-scaling fold-back lands with the kernel path (M1b); M1a
-        # supports rtn end-to-end.
-        raise NotImplementedError("awq load arrives in M1b")
 
     model = load_reference_model(args_model_dir(model_path), device=device)
-    mc = config["model_config"]
     group = config["group_size"]
     replaced = 0
+    awq_scales = {}
+    if config["algo"] == "awq":
+        awq_file = model_path / "awq_scales.json"
+        if awq_file.exists():
+            awq_scales = _json.loads(awq_file.read_text())
     with torch.no_grad():
         for name, mod in model.named_modules():
             if not isinstance(mod, torch.nn.Linear):
@@ -96,10 +101,24 @@ def load_w4_model(model_path: Path | str, device: str = "cuda:0") -> torch.nn.Mo
             assert w_hat.shape == (O, I), f"shape mismatch {key}: {w_hat.shape} vs {(O, I)}"
             mod.weight.copy_(w_hat.to(mod.weight.dtype).to(mod.weight.device))
             replaced += 1
+            if key in awq_scales:
+                s = torch.tensor(awq_scales[key], device=mod.weight.device,
+                                 dtype=mod.weight.dtype)
+                _wrap_input_scale(mod, s)
     if replaced != len(config["quantized_layers"]):
         raise RuntimeError(f"replaced {replaced} != expected {len(config['quantized_layers'])}")
-    print(f"W4 load: {replaced} linears dequantized from {model_path.name}")
+    print(f"W4 load: {replaced} linears dequantized from {model_path.name} (algo={config['algo']})")
     return model
+
+
+def _wrap_input_scale(linear: torch.nn.Linear, s: torch.Tensor):
+    """Make linear compute (x / s) @ W'^T so that y == x @ W^T with W = W'/s."""
+    orig_forward = linear.forward
+
+    def forward(x, *a, **kw):
+        return orig_forward(x / s, *a, **kw)
+
+    linear.forward = forward
 
 
 def args_model_dir(model_path: Path) -> Path:
