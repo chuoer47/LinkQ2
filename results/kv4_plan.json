@@ -3,8 +3,7 @@
   "v_quant": "per_token",
   "group_size": 64,
   "kv_fp16_layers": [
-    0,
-    2
+    0
   ],
   "stats": {
     "0": {

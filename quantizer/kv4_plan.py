@@ -87,14 +87,15 @@ def main():
     model = load_reference_model("models/Qwen3-1.7B", device=device)
     stats = profile_kv(model, calib_ids, device)
 
-    # keep FP16 for the top-2 outlier layers (expected: layer 0, maybe 1)
+    # keep FP16 for the top outlier layers, budgeted: 1 layer max
+    # (M2 measurement: 2 fp16 layers cap overall saving at 3.07x < 3.5x line)
     ranked = sorted(stats.items(), key=lambda kv: -(kv[1]["k_outlier"] + kv[1]["v_outlier"]))
-    fp16_layers = sorted(i for i, _ in ranked[:2])
+    fp16_layers = sorted(i for i, _ in ranked[:1])
 
     plan = {
         "k_quant": "per_channel",     # along head_dim after transpose
         "v_quant": "per_token",
-        "group_size": 64,
+        "group_size": 64,             # 128 tested: PPL +1.39 vs +0.56 — rejected
         "kv_fp16_layers": fp16_layers,
         "stats": {str(i): s for i, s in stats.items()},
     }
