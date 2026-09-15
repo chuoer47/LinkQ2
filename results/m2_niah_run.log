@@ -1,5 +1,5 @@
 `torch_dtype` is deprecated! Use `dtype` instead!
-Loading checkpoint shards:   0%|          | 0/2 [00:00<?, ?it/s]Loading checkpoint shards:  50%|█████     | 1/2 [00:00<00:00,  3.06it/s]Loading checkpoint shards: 100%|██████████| 2/2 [00:00<00:00,  5.25it/s]
+Loading checkpoint shards:   0%|          | 0/2 [00:00<?, ?it/s]Loading checkpoint shards:  50%|█████     | 1/2 [00:00<00:00,  2.92it/s]Loading checkpoint shards: 100%|██████████| 2/2 [00:00<00:00,  5.08it/s]
 Traceback (most recent call last):
   File "/home/<user>/<workdir>/qserve-lab/scripts/m2_s5_niah.py", line 83, in <module>
     run()
@@ -63,7 +63,7 @@ Traceback (most recent call last):
   File "<conda-env>/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1747, in _call_impl
     return forward_call(*args, **kwargs)
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/<user>/<workdir>/qserve-lab/qslab/model/patched.py", line 98, in forward
-    attn_output = F.scaled_dot_product_attention(
-                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 4.00 GiB. GPU 0 has a total capacity of 23.53 GiB of which 3.78 GiB is free. Including non-PyTorch memory, this process has 19.72 GiB memory in use. Of the allocated memory 18.47 GiB is allocated by PyTorch, and 862.34 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+  File "/home/<user>/<workdir>/qserve-lab/qslab/model/patched.py", line 96, in forward
+    hist_k, hist_v = k_full[:, :, :kv_start], v_full[:, :, :kv_start]
+                                   ^^^^^^^^
+NameError: name 'kv_start' is not defined

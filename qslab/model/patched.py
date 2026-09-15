@@ -93,6 +93,7 @@ class PatchedQwen3Attention(Qwen3Attention):
             # chunked prefill: split into (a) full attention over previous
             # chunks and (b) causal attention within the chunk — no explicit
             # mask tensor needed (saves O(Tq*Tk) additive-mask memory).
+            kv_start = T_k - T_q
             hist_k, hist_v = k_full[:, :, :kv_start], v_full[:, :, :kv_start]
             new_k, new_v = k_full[:, :, kv_start:], v_full[:, :, kv_start:]
             out_hist = F.scaled_dot_product_attention(
