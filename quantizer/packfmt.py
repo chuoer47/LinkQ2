@@ -33,11 +33,11 @@ def pack_w4(w: torch.Tensor, group_size: int = 128) -> tuple[torch.Tensor, torch
     zero = torch.zeros_like(scale.squeeze(-1))
     # pack: [O, I/g, g] int8 -> [O, I] int4 nibbles -> uint32 words
     qn = q.view(O, I).to(torch.uint8) & 0xF
-    qfp = torch.zeros(O, I // 8, dtype=torch.int64)
+    qfp = torch.zeros(O, I // 8, dtype=torch.int64, device=w16.device)
     for nib in range(8):
         qfp |= qn[:, nib::8].to(torch.int64) << (4 * nib)
-    qfp = qfp.to(torch.int32).view(torch.uint32)  # reinterpret bits as uint32
-    return qfp, scale.squeeze(-1).to(torch.float16), zero.to(torch.float16)
+    qfp = qfp.to(torch.int32).view(torch.uint32).cpu()  # store on cpu
+    return qfp, scale.squeeze(-1).to(torch.float16).cpu(), zero.to(torch.float16).cpu()
 
 
 def unpack_w4(qfp: torch.Tensor, scale: torch.Tensor, zero: torch.Tensor,
