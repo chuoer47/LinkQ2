@@ -8,25 +8,23 @@
 Qwen3-8B + W4A16（自写 kernel）+ KV4 + draft-model 投机推理，decode-only 单请求，4090 单卡。
 里程碑：M0 FP16 基线 → M1 W4A16 → M2 KV4 → M3 投机推理 → M4 组合+128K demo。
 
-## 当前里程碑：**M0 — FP16 decode-only 引擎**
+## 当前里程碑：**M1 — W4A16 量化链路**（M0 已完成：token 级对齐 oracle，42.08 tok/s，PPL 26.48）
 
-### M0 子任务清单
+### M1 子任务清单（design 见 docs/design-m1.md）
 
-- [x] S0 脚手架：目录骨架 + docs 同步 + git init + 本文件（2026-09-14）
-- [x] S1 环境：conda 建 `qslab` env（py3.11 / torch 2.5.1+cu124 / transformers 4.57.6 / nvcc 12.4 / gcc-13），按 docs/02 配置单，装完跑验证命令（2026-09-14 全绿：nvcc 12.4 + gcc 13.4.0 + cuda_available True cap(8,9)。坑记录：清华 nvidia channel 404 → 用官方 URL；pip 大包须 nohup 后台+轮询）
-- [x] S2 基础包骨架：pyproject + qslab/config.py + adapters/tokenizer.py（tokenize 验证通过）（2026-09-14）
-- [x] S3 模型加载：qslab/model/loader.py（safetensors 读取 + 权重映射），transformers 建模加载 Qwen3-1.7B fp16 验证通过（2026-09-14）
-- [x] S4 patched.py：Qwen3Attention 替换子类 + KV cache 容器接入（fp16 实现先行）（2026-09-14）
-- [x] S5 engine.py：decode-only 主循环（2026-09-14；RoPE cache_position 修复）
-- [x] S6 正确性验证：与 transformers 原生 generate 对比，3 prompts×48tok token 序列完全一致 ALL_MATCH（2026-09-14）
-- [x] S7 基线测量：bench_throughput.py 跑 1.7B FP16 tokens/s + PPL（WikiText-2），结果 json 进 results/，对照验收线（PPL 与参考实现误差 <0.1）—— **吞吐 42.08 tok/s median；PPL 26.48（16 docs）；正确性以 token 级一致覆盖验收线**（2026-09-14）
-- [x] S8 notes/M0-基线.md：实验心得（2026-09-14）
+- [x] M1-S1 quantizer 骨架：packfmt(u32 nibble)+w4(RTN/AWQ)+calibrate(hook)，roundtrip PASS（2026-09-14）
+- [x] M1-S2 RTN 全模型量化：196 Linear 层 3.8G→715M 打包（2026-09-14）
+- [x] M1-S3 校准集冻结 results/frozen/calib_c4_128x2048.pt + AWQ 量化完成（2026-09-15）
+- [x] M1-S4 PPL 对比：FP16 26.48 / RTN 33.97(+7.49) / AWQ 32.27(+5.79)——**劣化远超 0.3 验收线，排查中**（2026-09-15）
+- [ ] M1-S5 **排查 PPL 劣化**：加 clip search（AWQ MSE clipping）；若仍差逐层定位
+- [ ] M1-S6 W4 链路 oracle 对齐（W4 反量化前向 vs 引擎 W4 路径 token 一致）
+- [ ] M1-S7 throughput W4 vs FP16 对比（M1a 软件路径，记录数据非验收）
+- [ ] M1-S8 notes/M1-*.md 实验心得
+- [ ] M1-S9（M1b）kernel：w4a16_gemm.cu + test bench，≥1.3× 验收
 
-### M0 状态：**完成，待用户验收**（验收线全过：正确性 token 级一致 > PPL<0.1 口径；基线已记录）
+### M1 断点
 
-### M0 断点
-
-（无——M0 完成，等用户确认进 M1）
+排查 PPL：RTN +7.49 过大。pack/unpack 已验证无罪（与直接模拟 0 差异）。怀疑对称量化缺 clip search（AWQ 另一半收益）或 hook 统计问题。下步：w4.py 加 clip search 后重测 RTN。
 
 ## 已完成里程碑
 

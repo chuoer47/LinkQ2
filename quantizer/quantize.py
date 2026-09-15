@@ -33,7 +33,7 @@ def module_name_to_weight(name: str) -> str:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True)
-    ap.add_argument("--algo", choices=["rtn", "awq"], default="rtn")
+    ap.add_argument("--algo", choices=["rtn", "rtn_clip", "awq"], default="rtn")
     ap.add_argument("--out", required=True)
     ap.add_argument("--calib", default="results/frozen/calib_c4_128x2048.pt")
     ap.add_argument("--device", default="cuda:0")
