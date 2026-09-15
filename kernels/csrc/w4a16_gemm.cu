@@ -22,44 +22,70 @@
 
 __device__ __forceinline__ float dequant_nibble(uint32_t word, int nib,
                                                 float scale) {
-    int q = (word >> (4 * nib)) & 0xF;
-    if (q >= 8) q -= 16;                       // sign-extend 4-bit
+    // branch-free: (nibble - 8) covers [-8, 7] exactly
+    int q = static_cast<int>((word >> (4 * nib)) & 0xF) - 8;
     return static_cast<float>(q) * scale;
 }
 
 // y[m, n] = sum_k x[m, k] * dequant(qfp[n, k], scale[n, k/g])
-// Grid: (ceil(N/32), M)  Block: 32 threads (one warp per row)
+// v5: same layout as v4, but the dot product uses a shared-memory LUT:
+// per (row, group) the 16 dequantized values are precomputed once, then
+// each weight costs 1 shared load instead of shift+sub+cvt+fma chain.
 __global__ void w4a16_gemm_kernel(const uint32_t* __restrict__ qfp,
                                   const __half* __restrict__ scale,
                                   const __half* __restrict__ x,
                                   float* __restrict__ y,
                                   int M, int N, int K, int group_size) {
-    const int warp_id = blockIdx.x;            // one warp per row n
-    const int n = warp_id;
+    const int n = blockIdx.x * (blockDim.x >> 5) + (threadIdx.x >> 5);
     const int m = blockIdx.y;
+    const int lane = threadIdx.x & 31;
     if (n >= N) return;
 
-    const int lane = threadIdx.x;
     const int words_per_row = K / 8;
     const int words_per_group = group_size / 8;
-
     const uint32_t* row_qfp = qfp + (size_t)n * words_per_row;
     const __half* row_scale = scale + (size_t)n * (K / group_size);
     const __half* x_row = x + (size_t)m * K;
 
+    // shared LUT: [warp][16] dequant values for the current group
+    __shared__ float lut[8][16];               // up to 8 warps/block
+    const int warp_in_block = threadIdx.x >> 5;
+    float* my_lut = lut[warp_in_block];
+
     float acc = 0.0f;
-    // each lane strides over words: lane, lane+32, lane+64, ...
-    for (int w = lane; w < words_per_row; w += 32) {
+    int cur_group = -1;
+    const int vec_chunks = words_per_row / 4;
+    for (int c = lane; c < vec_chunks; c += 32) {
+        const int gidx = (c * 4) / words_per_group;
+        if (gidx != cur_group) {
+            cur_group = gidx;
+            float s = __half2float(row_scale[gidx]);
+            #pragma unroll
+            for (int v = 0; v < 16; ++v) my_lut[v] = (float)(v - 8) * s;
+        }
+        __syncwarp();
+        const uint4 pack = *reinterpret_cast<const uint4*>(row_qfp + c * 4);
+        const int k0 = c * 32;
+        #pragma unroll
+        for (int wi = 0; wi < 4; ++wi) {
+            uint32_t word = (&pack.x)[wi];
+            const int kb = k0 + wi * 8;
+            #pragma unroll
+            for (int nib = 0; nib < 8; ++nib) {
+                int q = static_cast<int>((word >> (4 * nib)) & 0xF);
+                acc += my_lut[q] * __half2float(x_row[kb + nib]);
+            }
+        }
+    }
+    // tail words (single-word groups may skip LUT update; reuse slow path)
+    for (int w = vec_chunks * 4 + lane; w < words_per_row; w += 32) {
         uint32_t word = row_qfp[w];
         float s = __half2float(row_scale[w / words_per_group]);
         const int k0 = w * 8;
         #pragma unroll
-        for (int nib = 0; nib < 8; ++nib) {
-            float wq = dequant_nibble(word, nib, s);
-            acc += wq * __half2float(x_row[k0 + nib]);
-        }
+        for (int nib = 0; nib < 8; ++nib)
+            acc += dequant_nibble(word, nib, s) * __half2float(x_row[k0 + nib]);
     }
-    // warp reduce
     for (int off = 16; off > 0; off >>= 1)
         acc += __shfl_down_sync(FULL_MASK, acc, off);
     if (lane == 0) y[(size_t)m * N + n] = acc;

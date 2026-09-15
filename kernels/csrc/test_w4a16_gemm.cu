@@ -101,13 +101,18 @@ void pack_host(const std::vector<__half>& w, int N, int K, int g,
     }
 }
 
-double bench(std::function<void()> fn, int iters = 200) {
+double bench(std::function<void()> fn, int iters = 200, bool flush_l2 = true) {
     fn(); fn();  // warmup
+    // L2 flush buffer (4090 has 72MB L2): rotate a dummy write across iters
+    float* flush_buf = nullptr;
+    const size_t flush_n = 96u * 1024 * 1024 / sizeof(float);  // 96MB > L2
+    if (flush_l2) CHECK_CUDA(cudaMalloc(&flush_buf, flush_n * sizeof(float)));
     cudaEvent_t t0, t1;
     CHECK_CUDA(cudaEventCreate(&t0));
     CHECK_CUDA(cudaEventCreate(&t1));
     std::vector<float> times;
     for (int i = 0; i < iters; ++i) {
+        if (flush_l2) CHECK_CUDA(cudaMemsetAsync(flush_buf, i & 0xFF, flush_n * sizeof(float)));
         CHECK_CUDA(cudaEventRecord(t0));
         fn();
         CHECK_CUDA(cudaEventRecord(t1));
@@ -116,6 +121,7 @@ double bench(std::function<void()> fn, int iters = 200) {
         CHECK_CUDA(cudaEventElapsedTime(&ms, t0, t1));
         times.push_back(ms);
     }
+    if (flush_l2) CHECK_CUDA(cudaFree(flush_buf));
     std::sort(times.begin(), times.end());
     return times[iters / 2];
 }
@@ -149,8 +155,8 @@ int main() {
         CHECK_CUDA(cudaMemcpy(x_d, x.data(), x.size() * 2, cudaMemcpyHostToDevice));
         CHECK_CUDA(cudaMemcpy(w_d, w.data(), w.size() * 2, cudaMemcpyHostToDevice));
 
-        dim3 grid(N, M);
-        double ms_w4 = bench([&] { w4a16_gemm_kernel<<<grid, 32>>>(qfp_d, scale_d, x_d, y_d, M, N, K, g); });
+        dim3 grid((N + 3) / 4, M);
+        double ms_w4 = bench([&] { w4a16_gemm_kernel<<<grid, 128>>>(qfp_d, scale_d, x_d, y_d, M, N, K, g); });
         double ms_fp16 = bench([&] { fp16_gemv_kernel<<<grid, 32>>>(w_d, x_d, y_ref_d, N, K); });
 
         // correctness: w4 vs fp16 GEMV on dequantized==original (quant err expected)
