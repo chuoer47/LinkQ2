@@ -20,7 +20,7 @@ Qwen3-8B + W4A16（自写 kernel）+ KV4 + draft-model 投机推理，decode-onl
 - [x] M1-S6 W4 链路 oracle 对齐（引擎 W4 路径 vs 直接反量化：2 prompts×32tok ALL_MATCH）（2026-09-15）
 - [x] M1-S7 throughput：FP16 复测 42.61 tok/s（与 M0 一致）；W4 反量化路径=FP16（无 kernel，正常）（2026-09-15）
 - [x] M1-S8 notes/M1a-软件链路.md（2026-09-15）
-- [ ] M1-S9（M1b）kernel：w4a16_gemm.cu + test bench，≥1.3× 验收
+- [ ] M1-S9（M1b）kernel：**进行中**——w4a16_gemm.cu 第一版编译跑通（sm_89，gcc-13 链路 4 个 leetcuda 坑全踩通）。首测：大形状 (6144,12288) 达 **3.59×** vs fp16 GEMV；小形状 (2048,2048) 仅 0.90×（warp 并行度不足）。下一步：小形状优化（block 内多 warp / 向量化读）
 - [ ] M1-S10 决策点：PPL +1.24 vs 0.3 线 gap——分析误差传导（校准质量/未量化 embed/QK-norm 路径），或与用户商议调整验收线/增加 GPTQ
 
 ### M1 断点
