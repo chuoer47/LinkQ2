@@ -191,9 +191,9 @@ class KV4Cache(BaseKVCache):
         # partial group needs re-quantization with new tokens merged in.
         # Full groups [0, n_full*g) are already packed and immutable.
         g = self.group
-        n_full = start // g                      # complete groups before this update
+        n_full = start // g                      # complete groups packed so far
         tail = start - n_full * g                # tokens already in the partial group
-        kq_cols = start // PACK_G                # pack offset (groups of 8 tokens)
+        kq_cols = n_full * g // PACK_G           # packed uint32 columns (= full groups)
         if tail > 0:
             # re-quantize the partial group + new tokens together
             prev_tail = self._k_tail             # [B,H,D,tail] fp32
@@ -221,12 +221,14 @@ class KV4Cache(BaseKVCache):
         # Read-back: dequantize packed FULL groups; the tail (partial group,
         # still unpacked) is spliced in from fp32 staging — attention reads
         # every token each step, tail included.
-        k_full_groups = _dequant_sym(self.k_q[:, :, :, :kq_cols],
-                                     self.k_s[:, :, :, :n_full], g)  # [B,H,D,n_full*g]
-        parts = [k_full_groups]
+        parts = []
+        if kq_cols > 0:
+            parts.append(_dequant_sym(self.k_q[:, :, :, :kq_cols],
+                                      self.k_s[:, :, :, :n_full], g))  # [B,H,D,n_full*g]
         if self._k_tail is not None:
             parts.append(self._k_tail.to(torch.float16))              # [B,H,D,tail]
-        k_t = torch.cat(parts, dim=-1)[..., :self.len]                # [B,H,D,len]
+        k_t = torch.cat(parts, dim=-1)[..., :self.len] if parts else \
+            torch.zeros(B_, H_, D_, self.len, device=self.device, dtype=torch.float16)
         k = k_t.transpose(-1, -2).contiguous()                        # [B,H,len,D]
         v = _dequant_sym(self.v_q[:, :, :self.len],
                          self.v_s[:, :, :self.len], self.group)
