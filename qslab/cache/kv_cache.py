@@ -54,6 +54,12 @@ class BaseKVCache:
     def memory_bytes_valid(self) -> int:
         return 2 * self.k[:, :, :self.len].nelement() * self.k.element_size()
 
+    def reset(self):
+        """Zero fp16 buffers and reset length (Base implementation)."""
+        self.k.zero_()
+        self.v.zero_()
+        self.len = 0
+
 
 class FP16KVCache(BaseKVCache):
     """M0 default: plain fp16 buffer."""
@@ -138,6 +144,13 @@ class KV8Cache(BaseKVCache):
         ns = self.k_s[:, :, :self.len].nelement()
         return 2 * (n * 1 + ns * 2)
 
+    def reset(self):
+        self.k_q.zero_()
+        self.k_s.zero_()
+        self.v_q.zero_()
+        self.v_s.zero_()
+        self.len = 0
+
     @property
     def memory_bytes(self) -> int:
         n = self.k_q.nelement()
@@ -205,13 +218,19 @@ class KV4Cache(BaseKVCache):
         self.v_s[:, :, start:start + T] = vs
         if start + T > self.len:
             self.len = start + T
-        Lp2 = ((self.len + g - 1) // g) * g
-        k = _dequant_sym(self.k_q[:, :, :, :Lp2 // PACK_G],
-                         self.k_s[:, :, :, :Lp2 // g], g)
-        k = k.transpose(-1, -2)[..., :self.len, :]        # back to [B,H,T,D]
+        # Read-back: dequantize packed FULL groups; the tail (partial group,
+        # still unpacked) is spliced in from fp32 staging — attention reads
+        # every token each step, tail included.
+        k_full_groups = _dequant_sym(self.k_q[:, :, :, :kq_cols],
+                                     self.k_s[:, :, :, :n_full], g)  # [B,H,D,n_full*g]
+        parts = [k_full_groups]
+        if self._k_tail is not None:
+            parts.append(self._k_tail.to(torch.float16))              # [B,H,D,tail]
+        k_t = torch.cat(parts, dim=-1)[..., :self.len]                # [B,H,D,len]
+        k = k_t.transpose(-1, -2).contiguous()                        # [B,H,len,D]
         v = _dequant_sym(self.v_q[:, :, :self.len],
                          self.v_s[:, :, :self.len], self.group)
-        return k.contiguous(), v
+        return k, v
 
     def reset(self):
         """Clear state (K tail staging included)."""

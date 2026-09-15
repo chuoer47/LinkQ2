@@ -68,11 +68,10 @@ class QslabEngine:
         self.model.eval()
 
     def reset_cache(self):
-        """Zero all engine KV caches and reset lengths (between generations)."""
+        """Reset all engine KV caches (polymorphic: each class knows its own
+        state — fp16 buffers, or int4 packs + tail staging)."""
         for c in self.kv_caches:
-            c.k.zero_()
-            c.v.zero_()
-            c.len = 0
+            c.reset()
 
     @torch.inference_mode()
     def prefill(self, input_ids: list[int]) -> torch.Tensor:
