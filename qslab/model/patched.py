@@ -77,25 +77,26 @@ class PatchedQwen3Attention(Qwen3Attention):
         # --- engine-owned cache update ---
         k_full, v_full = self.engine_cache.update(key_states, value_states)
 
-        # repeat KV for GQA, then explicit attention matmuls (swap points in M1/M2)
-        k_rep = repeat_kv(k_full, self.num_key_value_groups)
-        v_rep = repeat_kv(v_full, self.num_key_value_groups)
-        attn_weights = torch.matmul(query_states, k_rep.transpose(2, 3)) * self.scaling
-        # causal mask: query at global position p_q attends keys at p_k <= p_q.
-        # Works for both decode (T_q=1, cache holds history) and chunked
-        # prefill (T_q=chunk, cache holds previous chunks).
+        # GQA attention via SDPA (enable_gqa avoids materializing repeated KV;
+        # memory-efficient backend keeps attn weights unmaterialized).
         T_q = query_states.shape[2]
         T_k = k_full.shape[2]
-        kv_start = T_k - T_q                       # global pos of first query
-        q_pos = torch.arange(kv_start, T_k, device=attn_weights.device)   # [T_q]
-        k_pos = torch.arange(0, T_k, device=attn_weights.device)          # [T_k]
-        causal = k_pos[None, :] <= q_pos[:, None]                         # [T_q, T_k]
-        attn_weights = attn_weights + torch.where(
-            causal, 0.0, torch.finfo(attn_weights.dtype).min
-        )
-        attn_weights = F.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
-        attn_output = torch.matmul(attn_weights, v_rep)
-
+        if T_q == T_k:
+            # whole-sequence prefill: plain causal
+            attn_output = F.scaled_dot_product_attention(
+                query_states, k_full, v_full, is_causal=True, enable_gqa=True)
+        elif T_q == 1:
+            # decode step: cache holds [0, start), query attends everything
+            attn_output = F.scaled_dot_product_attention(
+                query_states, k_full, v_full, is_causal=False, enable_gqa=True)
+        else:
+            # chunked prefill: causal within the chunk + full attention to history
+            kv_start = T_k - T_q
+            q_pos = torch.arange(kv_start, T_k, device=query_states.device)
+            k_pos = torch.arange(0, T_k, device=query_states.device)
+            mask = (k_pos[None, :] <= q_pos[:, None])[None, None]  # [1,1,Tq,Tk]
+            attn_output = F.scaled_dot_product_attention(
+                query_states, k_full, v_full, attn_mask=mask, enable_gqa=True)
         attn_output = attn_output.transpose(1, 2).reshape(*input_shape, -1)
         return self.o_proj(attn_output), None
 
