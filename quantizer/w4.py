@@ -74,7 +74,7 @@ def clip_search_quantize(w: torch.Tensor, x_absmean: torch.Tensor | None = None,
     best_q = torch.zeros(O, I // group_size, group_size, dtype=torch.int8, device=w.device)
     best_scale = torch.zeros_like(amax)
     for i in range(n_grid):
-        ratio = 1.0 - i / n_grid * 0.98         # 1.0 -> 0.02 (full clip sweep)
+        ratio = 1.0 - i / n_grid * 0.6          # 1.0 -> 0.4 (sweep tested: best)
         scale = (amax * ratio / 7.0).clamp_min(1e-12)
         q = torch.clamp(torch.round(wg / scale), -8, 7)
         w_q = q * scale
