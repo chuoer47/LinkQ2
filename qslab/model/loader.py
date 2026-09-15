@@ -60,3 +60,56 @@ def read_safetensors_state_dict(model_path: Path | str) -> dict[str, torch.Tenso
             for key in f.keys():
                 sd[key] = f.get_tensor(key)
     return sd
+
+
+def load_w4_model(model_path: Path | str, device: str = "cuda:0") -> torch.nn.Module:
+    """Load a qslab_w4_v1 directory: rebuild the transformers model, replace
+    quantized Linears' weights with dequantized fp16 (M1a software path).
+
+    The backbone modules/structure stay transformers-owned; only weights swap.
+    Returns an eval-mode fp16 model functionally equivalent to the quantized
+    checkpoint (this is what the W4A16 kernel path must match in M1b).
+    """
+    from quantizer.packfmt import load_qslab_w4, unpack_w4
+
+    model_path = Path(model_path)
+    config, st, _calib = load_qslab_w4(model_path)
+    if config["algo"] != "rtn":
+        # AWQ act-scaling fold-back lands with the kernel path (M1b); M1a
+        # supports rtn end-to-end.
+        raise NotImplementedError("awq load arrives in M1b")
+
+    model = load_reference_model(args_model_dir(model_path), device=device)
+    mc = config["model_config"]
+    group = config["group_size"]
+    replaced = 0
+    with torch.no_grad():
+        for name, mod in model.named_modules():
+            if not isinstance(mod, torch.nn.Linear):
+                continue
+            key = f"{name}.weight"
+            if f"{key}.qfp" not in st:
+                continue
+            qfp, scale, zero = st[f"{key}.qfp"], st[f"{key}.scale"], st[f"{key}.zero"]
+            O, I = mod.weight.shape
+            w_hat = unpack_w4(qfp, scale, zero, I, group)
+            assert w_hat.shape == (O, I), f"shape mismatch {key}: {w_hat.shape} vs {(O, I)}"
+            mod.weight.copy_(w_hat.to(mod.weight.dtype).to(mod.weight.device))
+            replaced += 1
+    if replaced != len(config["quantized_layers"]):
+        raise RuntimeError(f"replaced {replaced} != expected {len(config['quantized_layers'])}")
+    print(f"W4 load: {replaced} linears dequantized from {model_path.name}")
+    return model
+
+
+def args_model_dir(model_path: Path) -> Path:
+    """The HF source dir the packed model was built from is stored in
+    calib/config indirectly; for 1.7B both live next to each other. The
+    packed model itself carries model_config, so rebuild from the ORIGINAL
+    HF dir recorded at pack time (convention: <packed_dir>.origin.txt)."""
+    origin = model_path.parent / (model_path.name + ".origin.txt")
+    if origin.exists():
+        return Path(origin.read_text().strip())
+    raise FileNotFoundError(
+        f"missing {origin}: write the source HF model dir there so the "
+        "backbone can be rebuilt (packed format stores weights only)")
