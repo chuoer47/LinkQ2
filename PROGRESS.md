@@ -17,9 +17,9 @@ Qwen3-8B + W4A16（自写 kernel）+ KV4 + draft-model 投机推理，decode-onl
 - [x] M1-S3 校准集冻结 results/frozen/calib_c4_128x2048.pt + AWQ 量化完成（2026-09-15）
 - [x] M1-S4 PPL 对比：FP16 26.48 / RTN 33.97(+7.49) / AWQ 32.27(+5.79)——**劣化远超 0.3 验收线，排查中**（2026-09-15）
 - [x] M1-S5 **排查 PPL 劣化**：3 轮算法实验——修 where 广播 bug；s 搜索重写（全局选优）；per-group s（+1.81 更差）；全 clip 范围（+2.17 更差）。**最优=全局 s + clip 0.4：PPL +1.24**（awq2 配方）。已确认链路无罪，算法迭代到收益递减点（2026-09-15）
-- [ ] M1-S6 W4 链路 oracle 对齐（W4 反量化前向 vs 引擎 W4 路径 token 一致）
-- [ ] M1-S7 throughput W4 vs FP16 对比（M1a 软件路径）
-- [ ] M1-S8 notes/M1-*.md 实验心得（含 RTN+7.49→AWQ+1.24 的完整调优叙事）
+- [x] M1-S6 W4 链路 oracle 对齐（引擎 W4 路径 vs 直接反量化：2 prompts×32tok ALL_MATCH）（2026-09-15）
+- [x] M1-S7 throughput：FP16 复测 42.61 tok/s（与 M0 一致）；W4 反量化路径=FP16（无 kernel，正常）（2026-09-15）
+- [x] M1-S8 notes/M1a-软件链路.md（2026-09-15）
 - [ ] M1-S9（M1b）kernel：w4a16_gemm.cu + test bench，≥1.3× 验收
 - [ ] M1-S10 决策点：PPL +1.24 vs 0.3 线 gap——分析误差传导（校准质量/未量化 embed/QK-norm 路径），或与用户商议调整验收线/增加 GPTQ
 
