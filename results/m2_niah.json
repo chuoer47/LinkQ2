@@ -1,0 +1,47 @@
+{
+  "ctx": 1024,
+  "model": "Qwen3-1.7B",
+  "results": {
+    "fp16": {
+      "overall_recall": 1.0,
+      "by_depth": [
+        {
+          "depth": 0.25,
+          "hits": 3,
+          "trials": 3
+        },
+        {
+          "depth": 0.5,
+          "hits": 3,
+          "trials": 3
+        },
+        {
+          "depth": 0.75,
+          "hits": 3,
+          "trials": 3
+        }
+      ]
+    },
+    "kv4": {
+      "overall_recall": 1.0,
+      "by_depth": [
+        {
+          "depth": 0.25,
+          "hits": 3,
+          "trials": 3
+        },
+        {
+          "depth": 0.5,
+          "hits": 3,
+          "trials": 3
+        },
+        {
+          "depth": 0.75,
+          "hits": 3,
+          "trials": 3
+        }
+      ]
+    }
+  },
+  "timestamp": "2026-09-15T18:30:13.350440"
+}

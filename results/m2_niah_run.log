@@ -1,69 +1,24 @@
 `torch_dtype` is deprecated! Use `dtype` instead!
-Loading checkpoint shards:   0%|          | 0/2 [00:00<?, ?it/s]Loading checkpoint shards:  50%|█████     | 1/2 [00:00<00:00,  2.92it/s]Loading checkpoint shards: 100%|██████████| 2/2 [00:00<00:00,  5.08it/s]
-Traceback (most recent call last):
-  File "/home/<user>/<workdir>/qserve-lab/scripts/m2_s5_niah.py", line 83, in <module>
-    run()
-  File "/home/<user>/<workdir>/qserve-lab/scripts/m2_s5_niah.py", line 64, in run
-    out = eng.generate_chunked(ids, max_new_tokens=12)
-          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "<conda-env>/lib/python3.11/site-packages/torch/utils/_contextlib.py", line 116, in decorate_context
-    return func(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^
-  File "/home/<user>/<workdir>/qserve-lab/qslab/engine.py", line 137, in generate_chunked
-    logits = self.prefill_chunked(input_ids, chunk=chunk)
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "<conda-env>/lib/python3.11/site-packages/torch/utils/_contextlib.py", line 116, in decorate_context
-    return func(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^
-  File "/home/<user>/<workdir>/qserve-lab/qslab/engine.py", line 94, in prefill_chunked
-    out = self.model(input_ids=x, cache_position=cache_pos, use_cache=False)
-          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "<conda-env>/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1736, in _wrapped_call_impl
-    return self._call_impl(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "<conda-env>/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1747, in _call_impl
-    return forward_call(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "<conda-env>/lib/python3.11/site-packages/transformers/utils/generic.py", line 918, in wrapper
-    output = func(self, *args, **kwargs)
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "<conda-env>/lib/python3.11/site-packages/transformers/models/qwen3/modeling_qwen3.py", line 480, in forward
-    outputs: BaseModelOutputWithPast = self.model(
-                                       ^^^^^^^^^^^
-  File "<conda-env>/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1736, in _wrapped_call_impl
-    return self._call_impl(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "<conda-env>/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1747, in _call_impl
-    return forward_call(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "<conda-env>/lib/python3.11/site-packages/transformers/utils/generic.py", line 1072, in wrapper
-    outputs = func(self, *args, **kwargs)
-              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "<conda-env>/lib/python3.11/site-packages/transformers/models/qwen3/modeling_qwen3.py", line 410, in forward
-    hidden_states = decoder_layer(
-                    ^^^^^^^^^^^^^^
-  File "<conda-env>/lib/python3.11/site-packages/transformers/modeling_layers.py", line 94, in __call__
-    return super().__call__(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "<conda-env>/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1736, in _wrapped_call_impl
-    return self._call_impl(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "<conda-env>/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1747, in _call_impl
-    return forward_call(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "<conda-env>/lib/python3.11/site-packages/transformers/utils/deprecation.py", line 172, in wrapped_func
-    return func(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^
-  File "<conda-env>/lib/python3.11/site-packages/transformers/models/qwen3/modeling_qwen3.py", line 260, in forward
-    hidden_states, _ = self.self_attn(
-                       ^^^^^^^^^^^^^^^
-  File "<conda-env>/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1736, in _wrapped_call_impl
-    return self._call_impl(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "<conda-env>/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1747, in _call_impl
-    return forward_call(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/<user>/<workdir>/qserve-lab/qslab/model/patched.py", line 96, in forward
-    hist_k, hist_v = k_full[:, :, :kv_start], v_full[:, :, :kv_start]
-                                   ^^^^^^^^
-NameError: name 'kv_start' is not defined
+Loading checkpoint shards:   0%|          | 0/2 [00:00<?, ?it/s]Loading checkpoint shards:  50%|█████     | 1/2 [00:00<00:00,  2.60it/s]Loading checkpoint shards: 100%|██████████| 2/2 [00:00<00:00,  4.59it/s]
+  [fp16 d=0.25 t=0] ans='The special magic nu' exp=435003 hit=True
+  [fp16 d=0.25 t=1] ans='The special magic nu' exp=636685 hit=True
+  [fp16 d=0.25 t=2] ans='The special magic nu' exp=334130 hit=True
+  [fp16 d=0.5 t=0] ans='The special magic nu' exp=921426 hit=True
+  [fp16 d=0.5 t=1] ans='The special magic nu' exp=983322 hit=True
+  [fp16 d=0.5 t=2] ans='The special magic nu' exp=887507 hit=True
+  [fp16 d=0.75 t=0] ans='The special magic nu' exp=351589 hit=True
+  [fp16 d=0.75 t=1] ans='The special magic nu' exp=744039 hit=True
+  [fp16 d=0.75 t=2] ans='The special magic nu' exp=216115 hit=True
+[fp16] overall recall 100.00%
+Loading checkpoint shards:   0%|          | 0/2 [00:00<?, ?it/s]Loading checkpoint shards:  50%|█████     | 1/2 [00:00<00:00,  2.32it/s]Loading checkpoint shards: 100%|██████████| 2/2 [00:00<00:00,  4.07it/s]
+  [kv4 d=0.25 t=0] ans='The special magic nu' exp=956436 hit=True
+  [kv4 d=0.25 t=1] ans='The special magic nu' exp=571497 hit=True
+  [kv4 d=0.25 t=2] ans='The special magic nu' exp=954340 hit=True
+  [kv4 d=0.5 t=0] ans='The special magic nu' exp=812390 hit=True
+  [kv4 d=0.5 t=1] ans='The special magic nu' exp=320436 hit=True
+  [kv4 d=0.5 t=2] ans='The special magic nu' exp=363730 hit=True
+  [kv4 d=0.75 t=0] ans='The special magic nu' exp=473960 hit=True
+  [kv4 d=0.75 t=1] ans='The special magic nu' exp=882206 hit=True
+  [kv4 d=0.75 t=2] ans='The special magic nu' exp=768695 hit=True
+[kv4] overall recall 100.00%
+saved results/m2_niah.json
