@@ -21,11 +21,13 @@ Qwen3-8B + W4A16（自写 kernel）+ KV4 + draft-model 投机推理，decode-onl
 - [x] M1-S7 throughput：FP16 复测 42.61 tok/s（与 M0 一致）；W4 反量化路径=FP16（无 kernel，正常）（2026-09-15）
 - [x] M1-S8 notes/M1a-软件链路.md（2026-09-15）
 - [ ] M1-S9（M1b）kernel：**进行中**——w4a16_gemm.cu 第一版编译跑通（sm_89，gcc-13 链路 4 个 leetcuda 坑全踩通）。首测：大形状 (6144,12288) 达 **3.59×** vs fp16 GEMV；小形状 (2048,2048) 仅 0.90×（warp 并行度不足）。下一步：小形状优化（block 内多 warp / 向量化读）
-- [ ] M1-S10 决策点：PPL +1.24 vs 0.3 线 gap——分析误差传导（校准质量/未量化 embed/QK-norm 路径），或与用户商议调整验收线/增加 GPTQ
+- [x] M1-S9（M1b）kernel：w4a16_gemm v5 完成。kernel 级 1.45/1.64/1.77×（主要 decode 形状达标），6144×12288 1.14× 未达；数值 rel err 7e-8；e2e 0.95×（结构性打平，8B 时收益显现）；notes/M1b-kernel.md（2026-09-15）
+- [ ] M1-S10 决策点：PPL +1.24 vs 0.3 线 gap——**等用户裁决**（选项见下）
 
 ### M1 断点
 
-算法收敛：awq2 配方（全局 s + clip 0.4 + 激活加权 clip）= PPL 27.72 (+1.24)。三个对照实验（per-group s / 全 clip / rtn）均劣于它。下步：M1-S6 oracle 对齐 → M1-S7 吞吐 → kernel。+1.24 vs 0.3 的 gap 处理见 S10 决策点。
+**M1 全部子任务完成，停在里程碑验收点。** 验收数据：PPL 27.72 (+1.24 vs FP16 26.48) / kernel 1.45~1.77×（主形状）/ token 级对齐全 PASS / 打包 5.3× 压缩 / e2e 0.95×。
+S10 选项：(a) 扩大校准集重跑争取 PPL<1；(b) 接受 +1.24 记录分析（推荐，8B M4 时复测）；(c) 调验收线。
 
 ## 已完成里程碑
 
