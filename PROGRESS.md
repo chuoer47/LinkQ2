@@ -53,14 +53,27 @@ Qwen3-8B + W4A16（自写 kernel）+ KV4 + draft-model 投机推理，decode-onl
 - [ ] M3-S6 bench_spec.py：acceptance rate + γ 扫描（1~6）+ 端到端加速比（验收线：ar≥2 时 ≥1.5×）
 - [ ] M3-S7 notes/M3-spec.md
 
-### M3 状态：**完成，待用户验收**
+### M3 状态：**完成，用户验收通过（2026-09-16，加速线记为 M4 复测项）**
 
-验收数据：无损性 **100% token 一致**（3 prompts×64tok，线 >99%）✅；AR=4.96@γ4 但 e2e **0.74×**（线：AR≥2 时 ≥1.5×）❌——负加速根因：Python 调度开销主导小模型场景，γ 扫描与四点分析在 notes/M3-spec.md。M4 的 8B target 是转正的实验点。
-注：docs/03 的加速线在 1.7B 上结构性达不到（模型小 + Python 引擎 dispatch 重），如实记录，8B 复测。
+## 当前里程碑：**M4 — 8B 组合拳 + 长上下文 demo**
 
-### M3 断点
+### M4 子任务清单
 
-（无——M3 完成，等用户确认进 M4）
+- [ ] M4-S0 下载 Qwen3-8B（~16G，ModelScope），显存预算核对
+- [ ] M4-S1 8B 量化：DeepCompressor 式校准 + AWQ 量化 + qslab_w4_v1 打包（复用 M1 全套）
+- [ ] M4-S2 8B W4 引擎验证：oracle 对齐 + PPL（复测 M1 的 +1.24 是否改善）
+- [ ] M4-S3 8B KV4：kv4_plan + engine kv4 模式（复测 M2 的 +0.56/3.34×）
+- [ ] M4-S4 8B 投机推理：0.6B draft + 8B target（复测 M3 的 0.74× 是否转正）
+- [ ] M4-S5 三件套组合：W4A16 + KV4 + Speculative 全开，无损性验证
+- [ ] M4-S6 四方对比表：FP16 / W4A16 / +KV4 / +Spec（tok/s + 显存 + PPL）
+- [ ] M4-S7 NIAH @8B（32K/128K YaRN demo，补 M2 遗留的 32K NIAH）
+- [ ] M4-S8 notes/M4-组合.md + README 收口
+
+### M3 状态：**完成，用户验收通过（2026-09-16，加速线记为 M4 复测项）**
+
+### M4 断点
+
+（开工——S0 下载 8B）
 
 ## 已完成里程碑
 
