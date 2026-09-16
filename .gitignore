@@ -11,3 +11,7 @@ __pycache__/
 results/**/*.pt
 third_party/cutlass/
 third_party/marlin/
+
+# R4: build artifacts and run logs are not source
+qslab/kernels/csrc/test_w4a16_gemm
+results/*.log

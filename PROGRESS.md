@@ -29,7 +29,10 @@
 - [x] 验收：三种 CLI 组合全部输出正确；W4+lookahead LOSSLESS=True
 
 ### R4 仓库清理
-- [ ] dbg_* 归档、m*_ 重构、committed 二进制与 results 日志出 git
+- [x] committed 二进制（test_w4a16_gemm）与 22 个 results/*.log 出 git，.gitignore 补全（保留 15 个结果 json）（2026-09-16）
+- [x] 14 个 dbg_* 归档到 scripts/archive/debug/
+- [x] m*_ 重组：4 个 bench → benchmarks/、4 个正确性门 → tests/、7 个一次性实验 → scripts/archive/
+- [x] **抓出并修复重构引入的静默回归**：R2 的 sed 误伤把 loader 里 `_wrap_input_scale(mod, s)` 改成裸元组 `(mod, s)`（Python 合法但 no-op）→ load_w4_model 的 AWQ fold-back 全失效、输出乱码。oracle_alignment 恢复 True（2026-09-16）
 
 ### R5 测试与锁定
 - [ ] pytest 套件 + environment.yml + requirements.txt

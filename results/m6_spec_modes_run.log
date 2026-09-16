@@ -1,12 +1,0 @@
-`torch_dtype` is deprecated! Use `dtype` instead!
-Loading checkpoint shards:   0%|          | 0/5 [00:00<?, ?it/s]Loading checkpoint shards:  20%|██        | 1/5 [00:00<00:01,  2.43it/s]Loading checkpoint shards:  40%|████      | 2/5 [00:00<00:01,  2.51it/s]Loading checkpoint shards:  60%|██████    | 3/5 [00:01<00:00,  2.56it/s]Loading checkpoint shards:  80%|████████  | 4/5 [00:01<00:00,  2.82it/s]Loading checkpoint shards: 100%|██████████| 5/5 [00:01<00:00,  3.80it/s]Loading checkpoint shards: 100%|██████████| 5/5 [00:01<00:00,  3.16it/s]
-[repetitive] baseline: 39.22 tok/s
-[repetitive] chained  :  27.96 tok/s | AR 4.96 | 0.71x | lossless=True
-[repetitive] lookahead:  56.59 tok/s | AR 4.96 | 1.44x | lossless=True
-[repetitive] dynamic  :  28.83 tok/s | AR 7.59 | 0.74x | lossless=True
-Loading checkpoint shards:   0%|          | 0/5 [00:00<?, ?it/s]Loading checkpoint shards:  20%|██        | 1/5 [00:00<00:01,  2.54it/s]Loading checkpoint shards:  40%|████      | 2/5 [00:00<00:01,  2.52it/s]Loading checkpoint shards:  60%|██████    | 3/5 [00:01<00:00,  2.54it/s]Loading checkpoint shards:  80%|████████  | 4/5 [00:01<00:00,  2.79it/s]Loading checkpoint shards: 100%|██████████| 5/5 [00:01<00:00,  3.66it/s]Loading checkpoint shards: 100%|██████████| 5/5 [00:01<00:00,  3.11it/s]
-[natural] baseline: 38.98 tok/s
-[natural] chained  :  28.40 tok/s | AR 4.96 | 0.73x | lossless=True
-[natural] lookahead:  56.16 tok/s | AR 4.96 | 1.44x | lossless=True
-[natural] dynamic  :  29.76 tok/s | AR 7.59 | 0.76x | lossless=True
-saved results/m6_spec_modes.json

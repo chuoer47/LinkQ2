@@ -1,8 +1,0 @@
-`torch_dtype` is deprecated! Use `dtype` instead!
-Loading checkpoint shards:   0%|          | 0/5 [00:00<?, ?it/s]Loading checkpoint shards:  20%|██        | 1/5 [00:00<00:03,  1.25it/s]Loading checkpoint shards:  40%|████      | 2/5 [00:01<00:02,  1.25it/s]Loading checkpoint shards:  60%|██████    | 3/5 [00:02<00:01,  1.37it/s]Loading checkpoint shards:  80%|████████  | 4/5 [00:02<00:00,  1.55it/s]Loading checkpoint shards: 100%|██████████| 5/5 [00:02<00:00,  2.17it/s]Loading checkpoint shards: 100%|██████████| 5/5 [00:02<00:00,  1.73it/s]
-Traceback (most recent call last):
-  File "<string>", line 14, in <module>
-  File "/home/<user>/<workdir>/qserve-lab/qslab/model/w4linear.py", line 68, in swap_w4_linears
-    qfp = st[f"{key}.qfp"].to(mod.weight.device)
-          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 24.00 MiB. GPU 0 has a total capacity of 23.53 GiB of which 23.81 MiB is free. Including non-PyTorch memory, this process has 23.48 GiB memory in use. Of the allocated memory 22.94 GiB is allocated by PyTorch, and 145.94 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)

@@ -1,7 +1,0 @@
-`torch_dtype` is deprecated! Use `dtype` instead!
-Loading checkpoint shards:   0%|          | 0/5 [00:00<?, ?it/s]Loading checkpoint shards:  20%|██        | 1/5 [00:00<00:01,  2.47it/s]Loading checkpoint shards:  40%|████      | 2/5 [00:00<00:01,  2.54it/s]Loading checkpoint shards:  60%|██████    | 3/5 [00:01<00:00,  2.61it/s]Loading checkpoint shards:  80%|████████  | 4/5 [00:01<00:00,  2.86it/s]Loading checkpoint shards: 100%|██████████| 5/5 [00:01<00:00,  3.77it/s]Loading checkpoint shards: 100%|██████████| 5/5 [00:01<00:00,  3.17it/s]
-W4-autodetect target-only: 39.90 tok/s
-gamma=2: 26.19 tok/s | AR 3.00 | speedup 0.66x
-gamma=4: 28.56 tok/s | AR 4.96 | speedup 0.72x
-gamma=6: 28.40 tok/s | AR 6.79 | speedup 0.71x
-saved results/m5_spec_retest.json
