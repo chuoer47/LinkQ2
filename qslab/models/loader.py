@@ -102,7 +102,7 @@ def load_w4_model(model_path: Path | str, device: str = "cuda:0") -> torch.nn.Mo
             if key in awq_scales:
                 s = torch.tensor(awq_scales[key], device=mod.weight.device,
                                  dtype=mod.weight.dtype)
-                _wrap_input_scale(mod, s)
+                (mod, s)
     if replaced != len(config["quantized_layers"]):
         raise RuntimeError(f"replaced {replaced} != expected {len(config['quantized_layers'])}")
     print(f"W4 load: {replaced} linears dequantized from {model_path.name} (algo={config['algo']})")
