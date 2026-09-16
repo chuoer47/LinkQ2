@@ -43,10 +43,14 @@
 - [x] 全套 19 passed
 
 ### R6 文档
-- [ ] README + 架构文档（含 nano-vllm 整合与 M7 量化 paged attention 路线图）
+- [x] README.md：结果表（四配置对比）、五层架构图、快速开始（CLI + Python 两种）、技术栈说明、测试表、仓库地图、路线图（M7 量化 paged attention + nano-vllm 整合）（2026-09-16）
+- [x] docs/architecture.md：数据流（一次 decode step 的完整调用链）、三策略接口的注册与扩展点表、"想加什么动哪里"对照表
+- [x] 最终验收：19 测试全过；关键指标无回归（W4 39.5 vs 39.8 tok/s、lookahead 1.42x vs 1.44x、AR 4.96 完全一致）
 
 ### 行为无回归基线（每阶段复测）
 8B W4 e2e 39.8 tok/s | PPL 17.31 | KV4 省 3.5× | lookahead 1.44× | oracle 对齐 PASS
 
-### R0 断点
-（无——R1 待开工）
+### 重构完成（2026-09-16）
+
+R0-R6 全部完成。仓库从"按里程碑堆叠的研究代码"变为五层分层、策略化、有测试有文档的工程仓库。
+7 个阶段 commit + 修复 2 个重构引入的真 bug（空提案 KV 错位、_wrap_input_scale 静默 no-op）。
