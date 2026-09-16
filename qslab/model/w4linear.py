@@ -65,12 +65,16 @@ def swap_w4_linears(model: torch.nn.Module, packed_dir: str) -> int:
         key = f"{name}.weight"
         if f"{key}.qfp" not in st:
             continue
-        qfp = st[f"{key}.qfp"].to(mod.weight.device)
-        scale = st[f"{key}.scale"].to(mod.weight.device)
+        dev = mod.weight.device
+        # free the fp16 weight BEFORE allocating the packed tensors — keeps
+        # peak memory at (fp16 model - swapped weights + packed weights)
+        mod.weight = None  # type: ignore[assignment]
+        torch.cuda.empty_cache() if dev.type == "cuda" else None
+        qfp = st[f"{key}.qfp"].to(dev)
+        scale = st[f"{key}.scale"].to(dev)
         act_s = None
         if key in awq_scales:
-            act_s = torch.tensor(awq_scales[key], device=mod.weight.device,
-                                 dtype=torch.float16)
+            act_s = torch.tensor(awq_scales[key], device=dev, dtype=torch.float16)
         w4 = W4Linear(qfp, scale, group, mod.in_features, mod.out_features,
                       act_scale=act_s)
         # splice into the parent module
