@@ -9,3 +9,5 @@ __pycache__/
 
 # results stay tracked, but big intermediate files excluded
 results/**/*.pt
+third_party/cutlass/
+third_party/marlin/
