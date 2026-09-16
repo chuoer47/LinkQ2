@@ -53,9 +53,14 @@ Qwen3-8B + W4A16（自写 kernel）+ KV4 + draft-model 投机推理，decode-onl
 - [ ] M3-S6 bench_spec.py：acceptance rate + γ 扫描（1~6）+ 端到端加速比（验收线：ar≥2 时 ≥1.5×）
 - [ ] M3-S7 notes/M3-spec.md
 
+### M3 状态：**完成，待用户验收**
+
+验收数据：无损性 **100% token 一致**（3 prompts×64tok，线 >99%）✅；AR=4.96@γ4 但 e2e **0.74×**（线：AR≥2 时 ≥1.5×）❌——负加速根因：Python 调度开销主导小模型场景，γ 扫描与四点分析在 notes/M3-spec.md。M4 的 8B target 是转正的实验点。
+注：docs/03 的加速线在 1.7B 上结构性达不到（模型小 + Python 引擎 dispatch 重），如实记录，8B 复测。
+
 ### M3 断点
 
-（开工——先写 design-m3）
+（无——M3 完成，等用户确认进 M4）
 
 ## 已完成里程碑
 
