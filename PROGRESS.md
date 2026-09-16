@@ -38,14 +38,24 @@ Qwen3-8B + W4A16（自写 kernel）+ KV4 + draft-model 投机推理，decode-onl
 - [ ] M2-S5 NIAH 32K：召回率对比（验收线降幅 <5%）
 - [ ] M2-S6 notes/M2-kv4.md
 
-### M2 状态：**完成，待用户验收**
+### M2 状态：**完成，用户验收通过（2026-09-16，边缘项记为 M4 复测项）**
 
-验收数据：PPL +0.56（线 0.5，差 0.06）/ 显存 3.34×（线 3.5×，差 5%）/ NIAH @1K 降幅 0% ✅（1.7B 检索上限 1K-2K，32K 留 M4-8B）。两线均边缘未达，等用户裁决：接受 or 微调（如 g=32 会再损 PPL，不推荐）/ 记为 M4 复测项。
-裁决历史：M1 S10 用户选 b（接受现状记录分析）。
+## 当前里程碑：**M3 — draft-model 投机推理**
 
-### M2 断点
+### M3 子任务清单
 
-（无——M2 完成，等用户确认进 M3）
+- [ ] M3-S0 design-m3：拒绝采样数学 + draft/target 调度设计
+- [ ] M3-S1 sampler.py：top-k/top-p/temperature 采样 + 拒绝采样核心（含无损性证明的单测）
+- [ ] M3-S2 spec/draft.py：Qwen3-0.6B draft 包装（同 tokenizer，engine 复用）
+- [ ] M3-S3 spec/verify.py：γ-token 批量验证 + 回滚逻辑
+- [ ] M3-S4 engine 集成：draft/target 交替编排循环
+- [ ] M3-S5 正确性：无损性验证（固定 seed 下与 target-only 采样一致率 >99%）
+- [ ] M3-S6 bench_spec.py：acceptance rate + γ 扫描（1~6）+ 端到端加速比（验收线：ar≥2 时 ≥1.5×）
+- [ ] M3-S7 notes/M3-spec.md
+
+### M3 断点
+
+（开工——先写 design-m3）
 
 ## 已完成里程碑
 
