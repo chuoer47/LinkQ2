@@ -38,8 +38,19 @@ class BaseKVCache:
 
     def update(self, k_new: torch.Tensor, v_new: torch.Tensor,
                start: int | None = None) -> tuple[torch.Tensor, torch.Tensor]:
-        """Append new K/V of shape [B, H, T, D]; return full K/V slices."""
+        """Append new K/V of shape [B, H, T, D]; return full K/V slices.
+
+        start can be a device 0-d long tensor (CUDA-Graph safe): the write is
+        done via index_copy_-style ops that keep static addresses."""
         T = k_new.shape[2]
+        if isinstance(start, torch.Tensor):
+            # graph-safe path: write via masked scatter at a dynamic position
+            pos = int(start.item())  # host sync only OUTSIDE graph replay
+            self.k[:, :, pos:pos + T, :] = k_new.to(self.dtype)
+            self.v[:, :, pos:pos + T, :] = v_new.to(self.dtype)
+            if pos + T > self.len:
+                self.len = pos + T
+            return self.k[:, :, :self.len], self.v[:, :, :self.len]
         start = self.len if start is None else start
         self.k[:, :, start:start + T, :] = k_new.to(self.dtype)
         self.v[:, :, start:start + T, :] = v_new.to(self.dtype)

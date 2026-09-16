@@ -1,0 +1,45 @@
+{
+  "repetitive": {
+    "baseline": 39.22,
+    "chained": {
+      "tok_s": 27.96,
+      "ar": 4.96,
+      "speedup": 0.713,
+      "lossless": true
+    },
+    "lookahead": {
+      "tok_s": 56.59,
+      "ar": 4.96,
+      "speedup": 1.443,
+      "lossless": true
+    },
+    "dynamic": {
+      "tok_s": 28.83,
+      "ar": 7.59,
+      "speedup": 0.735,
+      "lossless": true
+    }
+  },
+  "natural": {
+    "baseline": 38.98,
+    "chained": {
+      "tok_s": 28.4,
+      "ar": 4.96,
+      "speedup": 0.729,
+      "lossless": true
+    },
+    "lookahead": {
+      "tok_s": 56.16,
+      "ar": 4.96,
+      "speedup": 1.441,
+      "lossless": true
+    },
+    "dynamic": {
+      "tok_s": 29.76,
+      "ar": 7.59,
+      "speedup": 0.763,
+      "lossless": true
+    }
+  },
+  "timestamp": "2026-09-16T18:38:37.049177"
+}
