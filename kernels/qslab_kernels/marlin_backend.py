@@ -23,9 +23,9 @@ def _get_perms():
     """Marlin's thread/tile permutation tables (verbatim from upstream
     marlin/__init__.py::_get_perms — these encode the kernel's shared-memory
     tile layout and must match the CUDA source exactly)."""
-    global _SCALE_PERM, _PERM
+    global _SCALE_PERM, _SCALE_PERM_SINGLE, _PERM
     if _PERM is not None:
-        return _SCALE_PERM, _PERM
+        return _SCALE_PERM, _SCALE_PERM_SINGLE, _PERM
     import numpy as np
 
     perm = []
@@ -54,7 +54,8 @@ def _get_perms():
     for i in range(4):
         scale_perm_single.extend([2 * i + j for j in [0, 1, 8, 9, 16, 17, 24, 25]])
     _SCALE_PERM, _PERM = scale_perm, perm
-    return _SCALE_PERM, scale_perm_single, _PERM
+    _SCALE_PERM_SINGLE = scale_perm_single
+    return scale_perm, scale_perm_single, _PERM
 
 
 def pack_v1_to_marlin(qfp: torch.Tensor, scale: torch.Tensor,

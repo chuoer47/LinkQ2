@@ -45,7 +45,7 @@ def unpack_w4(qfp: torch.Tensor, scale: torch.Tensor, zero: torch.Tensor,
     """(qfp, scale, zero) -> dequantized fp16 weight [O, I]."""
     O = qfp.shape[0]
     qfp_i64 = qfp.view(torch.int32).to(torch.int64) & 0xFFFFFFFF
-    qn = torch.zeros(O, in_features, dtype=torch.uint8)
+    qn = torch.zeros(O, in_features, dtype=torch.uint8, device=qfp.device)
     for nib in range(8):
         qn[:, nib::8] = ((qfp_i64 >> (4 * nib)) & 0xF).to(torch.uint8)
     q = qn.view(O, in_features // group_size, group_size).to(torch.int16)
