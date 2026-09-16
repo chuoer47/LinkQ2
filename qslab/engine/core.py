@@ -29,26 +29,10 @@ class QslabEngine:
         self.model_cfg = load_model_config(cfg.model_path)
         self.model = load_reference_model(cfg.model_path, device=self.device)
 
-        # per-layer cache classes (M2): default all fp16, plan overrides
-        from qslab.quant.cache.kv_cache import FP16KVCache, KV8Cache, KV4Cache
-        classes = {"fp16": FP16KVCache, "kv8": KV8Cache, "kv4": KV4Cache}
-        assert kv_mode in classes, f"unknown kv_mode {kv_mode}"
-        fp16_layers: set[int] = set()
-        kv_group = 64
-        if kv_plan_path:
-            plan = json.loads(open(kv_plan_path).read())
-            fp16_layers = set(plan.get("kv_fp16_layers", []))
-            kv_group = plan.get("group_size", 64)
-
-        cache_classes = []
-        for i in range(self.model_cfg.num_hidden_layers):
-            if kv_mode == "fp16" or i in fp16_layers:
-                cache_classes.append(FP16KVCache)
-            else:
-                cache_classes.append(classes[kv_mode])
-
-        # replace attention with engine-managed cache version; patch_model
-        # accepts a factory so each layer gets its own cache class
+        # per-layer caches come from an L1 strategy (R2): the kv_mode /
+        # plan-file decision lives in qslab.quant.kv_strategies, not here.
+        from qslab.quant.kv_strategies_impl import build_strategy
+        self.kv_strategy = build_strategy(kv_mode, kv_plan_path)
         self.kv_caches = patch_model(
             self.model,
             num_layers=self.model_cfg.num_hidden_layers,
@@ -56,13 +40,13 @@ class QslabEngine:
             head_dim=self.model_cfg.head_dim,
             max_len=self.model_cfg.max_position_embeddings,
             device=self.device,
-            cache_factory=lambda i: cache_classes[i](
+            cache_factory=lambda i: self.kv_strategy.build(
+                layer_idx=i,
                 batch=1,
                 num_kv_heads=self.model_cfg.num_key_value_heads,
                 head_dim=self.model_cfg.head_dim,
                 max_len=self.model_cfg.max_position_embeddings,
                 device=self.device,
-                **({} if cache_classes[i] is FP16KVCache else {"group": kv_group}),
             ),
         )
         self.model.eval()
