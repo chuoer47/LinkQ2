@@ -1,0 +1,24 @@
+`torch_dtype` is deprecated! Use `dtype` instead!
+Loading checkpoint shards:   0%|          | 0/2 [00:00<?, ?it/s]Loading checkpoint shards:  50%|█████     | 1/2 [00:00<00:00,  2.77it/s]Loading checkpoint shards: 100%|██████████| 2/2 [00:00<00:00,  4.75it/s]
+  [fp16 d=0.25 t=0] ans='The special magic nu' exp=435003 hit=True
+  [fp16 d=0.25 t=1] ans='The special magic nu' exp=636685 hit=True
+  [fp16 d=0.25 t=2] ans='The special magic nu' exp=334130 hit=True
+  [fp16 d=0.5 t=0] ans='The special magic nu' exp=921426 hit=True
+  [fp16 d=0.5 t=1] ans='The special magic nu' exp=983322 hit=True
+  [fp16 d=0.5 t=2] ans='The special magic nu' exp=887507 hit=True
+  [fp16 d=0.75 t=0] ans='The special magic nu' exp=351589 hit=True
+  [fp16 d=0.75 t=1] ans='The special magic nu' exp=744039 hit=True
+  [fp16 d=0.75 t=2] ans='The special magic nu' exp=216115 hit=True
+[fp16] overall recall 100.00%
+Loading checkpoint shards:   0%|          | 0/2 [00:00<?, ?it/s]Loading checkpoint shards:  50%|█████     | 1/2 [00:00<00:00,  2.32it/s]Loading checkpoint shards: 100%|██████████| 2/2 [00:00<00:00,  4.12it/s]
+  [kv4 d=0.25 t=0] ans='The special magic nu' exp=956436 hit=True
+  [kv4 d=0.25 t=1] ans='The special magic nu' exp=571497 hit=True
+  [kv4 d=0.25 t=2] ans='The special magic nu' exp=954340 hit=True
+  [kv4 d=0.5 t=0] ans='The special magic nu' exp=812390 hit=True
+  [kv4 d=0.5 t=1] ans='The special magic nu' exp=320436 hit=True
+  [kv4 d=0.5 t=2] ans='The special magic nu' exp=363730 hit=True
+  [kv4 d=0.75 t=0] ans='The special magic nu' exp=473960 hit=True
+  [kv4 d=0.75 t=1] ans='The special magic nu' exp=882206 hit=True
+  [kv4 d=0.75 t=2] ans='The special magic nu' exp=768695 hit=True
+[kv4] overall recall 100.00%
+saved results/m2_niah.json
