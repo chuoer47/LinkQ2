@@ -73,22 +73,17 @@ Qwen3-8B + W4A16（自写 kernel）+ KV4 + draft-model 投机推理，decode-onl
 
 ### M4 状态：**完成，用户验收通过（2026-09-16）**
 
-## 当前里程碑：**M5 — 算子升级（Marlin 接入）**
+## 当前里程碑：**M6 — 投机推理模式扩展（完成）**
 
-### M5 子任务清单
+### M6 成果
 
-- [x] M5-S0 调研：CUTLASS mixed-input 无 sm89 collective（硬约束）；Marlin 锚点 bench（M=1/K12288 911GB/s、prefill 148 TFLOPS）；用户拍板 vendor Marlin（2026-09-16）
-- [x] M5-S1 Marlin（IST-DASLab, Apache 2.0）vendor 编译进 qslab env + v1→marlin repack 转换，单层对拍 rel err 6e-8（2026-09-16）
-- [x] M5-S2 三方 kernel bench（v1/marlin/cublas × 3形状 × M{1,8,512,4096}）：marlin M≥8 全面领先 v1（最多 27×）；M=1 小形状 v1 反超（35µs vs 148µs，marlin 有 ~100µs 固定开销）；prefill 区间 cublas-fp16 反量化也强（数据 results/m5_kernel_bench.json）（2026-09-16）
-- [x] M5-S3 W4Linear autodetect backend（M=1→v1，M>1→marlin）+ 修 marlin buffer 未上 GPU 的 illegal access；8B e2e **14.2 → 39.78 tok/s**（fp16 基线 42.4，差距 6%，"持平"达成）（2026-09-16）
-- [ ] M5-S4 notes/M5-算子升级.md（含 CUTLASS 不可行原因、repack 格式解析、三方数据）
-- [ ] M5-S5 PROGRESS/README 收口
+- lookahead 自投机模式：**1.44×**（首个显著转正的投机模式，无 draft 模型，n-gram 提案）
+- chained 0.72× / dynamic 0.76×（诚实记录：draft Python 循环是 chained 瓶颈）
+- 三模式共享无损验证框架，全部 100% token 一致
+- CUDA Graph 中止决策（ring-cache 工程>收益，骨架留 graph_decoder.py）
+- notes/M6-投机模式.md
 
-### M4 状态：**完成，用户验收通过（2026-09-16）**
-
-### M5 断点
-
-（S4 笔记进行中）
+### M5 状态：**完成，用户验收通过（2026-09-16）**
 
 ## 已完成里程碑
 
