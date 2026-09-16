@@ -16,7 +16,11 @@
 - [x] 验收：1.7B oracle 冒烟 PASS（输出与重构前一致）
 
 ### R2 策略接口
-- [ ] QuantBackend / KVCacheStrategy(预留 paged) / SpeculationMode + 注册表
+- [x] registry.py 通用注册表（装饰器注册 + 工厂查询）
+- [x] QuantBackend(L1)：w4.v1 / w4.marlin / w4.auto 三后端，**M 分派内化到 backend**；W4Linear 只调 backend.linear()，L2->L0 直连彻底消除（2026-09-16）
+- [x] KVCacheStrategy(L1)：fp16/kv8/kv4/kv4.plan 策略 + 注册表；engine 的内联 kv_mode 分派改为策略工厂；**paged 位已预留**（M7 用）
+- [x] SpeculationMode(L3)：chained/lookahead/dynamic 策略类，验证/回滚逻辑与提案策略解耦；补回 lookahead 空提案回退（重构中丢失的路径）（2026-09-16）
+- [x] 验收：三模式 lossless=True（ar 4.00/1.75/4.71）；QuantBackend 冒烟输出与基线一致
 
 ### R3 统一入口
 - [ ] LLM(model_path).generate(...) + qslab CLI

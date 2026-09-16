@@ -51,46 +51,14 @@ class SpeculativeEngine:
                  dynamic_window: int = 3):
         assert gamma >= 1
         self.gamma = gamma
-        self.mode = mode
-        self.dynamic_window = dynamic_window
-        self._recent_accepts: list[int] = []
-        self._ngram_index: dict[tuple[int, ...], list[int]] = {}
+        self.mode_name = mode
+        from qslab.engine.spec.modes import build_mode
+        self.mode = build_mode(mode)          # L3 proposal strategy (R2)
         self.target = target_engine or QslabEngine(target_cfg, kv_mode=kv_mode,
                                                    kv_plan_path=kv_plan_path)
         self.draft = None
-        if mode in ("chained", "dynamic"):
+        if self.mode.needs_draft:
             self.draft = QslabEngine(draft_cfg, kv_mode="fp16")
-
-    # ---- mode helpers ----
-
-    def _current_gamma(self) -> int:
-        """dynamic mode: adapt gamma to the recent acceptance trend."""
-        if self.mode != "dynamic" or not self._recent_accepts:
-            return self.gamma
-        recent = self._recent_accepts[-self.dynamic_window:]
-        avg = sum(recent) / len(recent)
-        if avg >= self.gamma - 0.1:        # nearly full acceptance -> grow
-            return min(self.gamma + 3, 12)
-        if avg <= 1.0:                      # frequent rejects -> shrink
-            return max(1, self.gamma // 2)
-        return self.gamma
-
-    def _ngram_lookup(self, key: tuple[int, ...]) -> list[int]:
-        return self._ngram_index.get(key, [])
-
-    def _build_ngram(self, ids: list[int], n: int = 3):
-        """Index the prompt with n-gram keys (longest-match candidates)."""
-        for i in range(len(ids) - n):
-            key = tuple(ids[i:i + n])
-            self._ngram_index.setdefault(key, ids[i + n:i + n + self.gamma])
-
-    def _index_ngrams(self, ids: list[int], n: int = 3):
-        """Incrementally index newly generated tail (last few tokens)."""
-        start = max(0, len(ids) - self.gamma - n)
-        for i in range(start, len(ids) - n):
-            key = tuple(ids[i:i + n])
-            if key not in self._ngram_index:
-                self._ngram_index[key] = ids[i + n:i + n + self.gamma]
 
     @torch.inference_mode()
     def generate(self, input_ids: list[int], max_new_tokens: int,
@@ -100,8 +68,7 @@ class SpeculativeEngine:
             self.draft.reset_cache()
         stats = {"rounds": 0, "draft_steps": 0, "target_fwds": 0, "accepted": 0}
         generated: list[int] = []
-        self._ngram_index.clear()
-        self._recent_accepts.clear()
+        self.mode.on_start(input_ids)
 
         # target prefills; its argmax verifies the first proposal
         t_logits = self.target.prefill(input_ids)
@@ -111,46 +78,32 @@ class SpeculativeEngine:
         if self.draft is not None:
             d_logits = self.draft.prefill(input_ids)
 
-        # n-gram index for lookahead mode (prompt terms)
-        if self.mode == "lookahead":
-            self._build_ngram(input_ids)
-
         while len(generated) < max_new_tokens:
             if eos_id is not None and prev_target_pred == eos_id:
                 break
-            gamma = self._current_gamma()
+            gamma = self.gamma
 
-            # 1) proposals (mode-dependent)
-            proposal: list[int] = []
-            if self.mode == "lookahead":
-                context = tuple(input_ids + generated)
-                # try longest n-gram match first (up to gamma tokens)
-                for n in range(gamma, 0, -1):
-                    key = context[-n:] if n <= len(context) else None
-                    if key and key in self._ngram_index:
-                        cands = self._ngram_index[key]
-                        if cands:
-                            # follow the lookup chain up to gamma tokens
-                            proposal = list(cands)
-                            seq = list(context) + proposal
-                            for _ in range(gamma - len(proposal)):
-                                nxt = self._ngram_lookup(tuple(seq[-n:]))
-                                if not nxt:
-                                    break
-                                proposal.append(nxt)
-                                seq.append(nxt)
-                            break
-            else:
-                d_last = d_logits
-                for _ in range(min(gamma, max_new_tokens - len(generated))):
-                    d_tok = int(d_last.argmax(dim=-1))
-                    proposal.append(d_tok)
-                    if len(generated) + len(proposal) >= max_new_tokens:
-                        break
-                    d_last = self.draft.decode_step(
-                        d_tok, start_pos=len(input_ids) + len(generated) + len(proposal) - 1)
-                    stats["draft_steps"] += 1
+            # 1) proposals come from the mode strategy (R2)
+            from qslab.engine.spec.modes import ProposalContext
+            gamma = self.mode.current_gamma(gamma)
+            proposal = self.mode.propose(ProposalContext(
+                input_ids=input_ids, generated=generated, gamma=gamma,
+                max_new_tokens=max_new_tokens, draft=self.draft,
+                draft_logits=(d_logits if self.mode.needs_draft else None),
+                stats=stats))
+            proposal = [int(t) for t in proposal]
             proposal = proposal[:max(1, max_new_tokens - len(generated))]
+            if not proposal:
+                # mode produced nothing (lookahead miss on a novel token):
+                # fall back to one plain target step so we always make progress
+                t_step = self.target.decode_step(
+                    prev_target_pred,
+                    start_pos=len(input_ids) + len(generated) - 1)
+                stats["target_fwds"] += 1
+                generated.append(prev_target_pred)
+                prev_target_pred = int(t_step.argmax(dim=-1))
+                self.mode.on_round_end(input_ids, generated, 0)
+                continue
 
             # 2) target scores proposals in one forward (cache already holds
             # exactly `generated`; writes land at [len(generated), ...))
@@ -202,11 +155,8 @@ class SpeculativeEngine:
             generated.extend(emitted)
             prev_target_pred = int(t_commit.argmax(dim=-1))
 
-            # update mode state
-            if self.mode == "lookahead":
-                self._index_ngrams(input_ids + generated)
-            elif self.mode == "dynamic":
-                self._recent_accepts.append(accept_len)
+            # update mode state (R2 strategy hook)
+            self.mode.on_round_end(input_ids, generated, accept_len)
 
         self.last_stats = {
             **stats,
