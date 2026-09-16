@@ -90,17 +90,15 @@ class PatchedQwen3Attention(Qwen3Attention):
             attn_output = F.scaled_dot_product_attention(
                 query_states, k_full, v_full, is_causal=False, enable_gqa=True)
         else:
-            # chunked prefill: split into (a) full attention over previous
-            # chunks and (b) causal attention within the chunk — no explicit
-            # mask tensor needed (saves O(Tq*Tk) additive-mask memory).
+            # chunked prefill: explicit bool mask (history full + chunk causal).
+            # NOTE: cannot split into two SDPA calls — softmax is not additive
+            # across key splits (learned the hard way, see notes/M3).
             kv_start = T_k - T_q
-            hist_k, hist_v = k_full[:, :, :kv_start], v_full[:, :, :kv_start]
-            new_k, new_v = k_full[:, :, kv_start:], v_full[:, :, kv_start:]
-            out_hist = F.scaled_dot_product_attention(
-                query_states, hist_k, hist_v, is_causal=False, enable_gqa=True)
-            out_new = F.scaled_dot_product_attention(
-                query_states, new_k, new_v, is_causal=True, enable_gqa=True)
-            attn_output = out_hist + out_new
+            q_pos = torch.arange(kv_start, T_k, device=query_states.device)
+            k_pos = torch.arange(0, T_k, device=query_states.device)
+            mask = (k_pos[None, :] <= q_pos[:, None])[None, None]  # [1,1,Tq,Tk] bool
+            attn_output = F.scaled_dot_product_attention(
+                query_states, k_full, v_full, attn_mask=mask, enable_gqa=True)
         attn_output = attn_output.transpose(1, 2).reshape(*input_shape, -1)
         return self.o_proj(attn_output), None
 
