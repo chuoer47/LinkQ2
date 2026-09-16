@@ -23,7 +23,10 @@
 - [x] 验收：三模式 lossless=True（ar 4.00/1.75/4.71）；QuantBackend 冒烟输出与基线一致
 
 ### R3 统一入口
-- [ ] LLM(model_path).generate(...) + qslab CLI
+- [x] qslab/api/llm.py：LLM 门面（model + w4 + kv_mode + draft 正交组合，SamplingParams，stats/kv_memory/weight_memory 查询）（2026-09-16）
+- [x] qslab/api/cli.py：python -m qslab.api.cli generate --model ... [--w4 --kv-mode --draft --spec-mode]
+- [x] 修复 R2 引入的真 bug：lookahead 空提案回退分支的 commit 位置算错（start_pos 少 1）导致 KV 错位、无损性失败——**由统一入口的端到端测试抓出**（2026-09-16）
+- [x] 验收：三种 CLI 组合全部输出正确；W4+lookahead LOSSLESS=True
 
 ### R4 仓库清理
 - [ ] dbg_* 归档、m*_ 重构、committed 二进制与 results 日志出 git

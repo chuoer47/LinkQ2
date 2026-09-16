@@ -95,10 +95,12 @@ class SpeculativeEngine:
             proposal = proposal[:max(1, max_new_tokens - len(generated))]
             if not proposal:
                 # mode produced nothing (lookahead miss on a novel token):
-                # fall back to one plain target step so we always make progress
-                t_step = self.target.decode_step(
-                    prev_target_pred,
-                    start_pos=len(input_ids) + len(generated) - 1)
+                # fall back to one plain target step so we always make progress.
+                # `generated` already holds N tokens whose KV occupy slots
+                # [0, N), so the commit of the (N+1)-th token writes at slot N.
+                commit_pos = len(input_ids) + len(generated)
+                t_step = self.target.decode_step(prev_target_pred,
+                                                 start_pos=commit_pos)
                 stats["target_fwds"] += 1
                 generated.append(prev_target_pred)
                 prev_target_pred = int(t_step.argmax(dim=-1))
