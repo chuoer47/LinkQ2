@@ -55,8 +55,9 @@ class W4Linear(torch.nn.Module):
         orig_shape = x.shape
         x2 = x.reshape(-1, orig_shape[-1]) if x.dim() != 2 else x
         M = x2.shape[0]
-        # autodetect: marlin from M>1 (tensor-core GEMM path wins), v1 at M=1
-        use_marlin = (self._marlin_ok and M > 1) if self.backend == "autodetect" \
+        # autodetect: marlin from M>8 (true prefill; marlin's ~100us/call fixed
+        # cost loses to v1 below that — spec-decode verify uses M<=gamma<=8)
+        use_marlin = (self._marlin_ok and M > 8) if self.backend == "autodetect" \
             else self._marlin_ok
         if use_marlin:
             from kernels.qslab_kernels.marlin_backend import marlin_gemm
