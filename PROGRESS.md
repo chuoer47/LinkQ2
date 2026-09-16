@@ -71,15 +71,24 @@ Qwen3-8B + W4A16（自写 kernel）+ KV4 + draft-model 投机推理，decode-onl
 
 ### M3 状态：**完成，用户验收通过（2026-09-16，加速线记为 M4 复测项）**
 
-### M4 状态：**完成，待用户验收**
+### M4 状态：**完成，用户验收通过（2026-09-16）**
 
-四方矩阵：fp16 42.4tok/s PPL16.07 / w4 14.2 +1.24 / +kv4 9.0 +1.63 KV省3.5×✅ / +spec 10.8（+19%，转正）。
-32K NIAH @8B：fp16/kv4 双 100% ✅（M2 遗留关闭）。未达线：PPL 合计 +1.63（M1 已裁决接受 W4 部分）、spec 1.19×<1.5×、128K YaRN demo 未跑。
-笔记：notes/M4-组合.md（含简历叙事素材）。
+## 当前里程碑：**M5 — 算子升级（Marlin 接入）**
 
-### M4 断点
+### M5 子任务清单
 
-（无——M4 主体完成，等用户验收；可选加跑 128K YaRN demo）
+- [x] M5-S0 调研：CUTLASS mixed-input 无 sm89 collective（硬约束）；Marlin 锚点 bench（M=1/K12288 911GB/s、prefill 148 TFLOPS）；用户拍板 vendor Marlin（2026-09-16）
+- [x] M5-S1 Marlin（IST-DASLab, Apache 2.0）vendor 编译进 qslab env + v1→marlin repack 转换，单层对拍 rel err 6e-8（2026-09-16）
+- [x] M5-S2 三方 kernel bench（v1/marlin/cublas × 3形状 × M{1,8,512,4096}）：marlin M≥8 全面领先 v1（最多 27×）；M=1 小形状 v1 反超（35µs vs 148µs，marlin 有 ~100µs 固定开销）；prefill 区间 cublas-fp16 反量化也强（数据 results/m5_kernel_bench.json）（2026-09-16）
+- [x] M5-S3 W4Linear autodetect backend（M=1→v1，M>1→marlin）+ 修 marlin buffer 未上 GPU 的 illegal access；8B e2e **14.2 → 39.78 tok/s**（fp16 基线 42.4，差距 6%，"持平"达成）（2026-09-16）
+- [ ] M5-S4 notes/M5-算子升级.md（含 CUTLASS 不可行原因、repack 格式解析、三方数据）
+- [ ] M5-S5 PROGRESS/README 收口
+
+### M4 状态：**完成，用户验收通过（2026-09-16）**
+
+### M5 断点
+
+（S4 笔记进行中）
 
 ## 已完成里程碑
 
