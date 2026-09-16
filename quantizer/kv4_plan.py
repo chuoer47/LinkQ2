@@ -80,11 +80,14 @@ def profile_kv(model, calib_ids: list[int], device: str) -> dict[int, dict]:
 
 
 def main():
+    import sys
+    model_path = sys.argv[1] if len(sys.argv) > 1 else "models/Qwen3-1.7B"
+    out_path = sys.argv[2] if len(sys.argv) > 2 else "results/kv4_plan.json"
     device = "cuda:0"
     blob = torch.load("results/frozen/calib_c4_128x2048.pt", weights_only=False)
     calib_ids = blob["token_ids"][0]
 
-    model = load_reference_model("models/Qwen3-1.7B", device=device)
+    model = load_reference_model(model_path, device=device)
     stats = profile_kv(model, calib_ids, device)
 
     # keep FP16 for the top outlier layers, budgeted: 1 layer max
@@ -100,7 +103,7 @@ def main():
         "stats": {str(i): s for i, s in stats.items()},
     }
     Path("results").mkdir(exist_ok=True)
-    Path("results/kv4_plan.json").write_text(json.dumps(plan, indent=2))
+    Path(out_path).write_text(json.dumps(plan, indent=2))
     print("outlier ranking (top 5):")
     for i, s in ranked[:5]:
         print(f"  layer {i}: k_outlier {s['k_outlier']:.1f}, v_outlier {s['v_outlier']:.1f}")

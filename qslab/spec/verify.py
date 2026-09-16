@@ -36,10 +36,14 @@ class SpeculativeEngine:
     """Wraps a target engine and a draft engine; owns the draft/verify loop."""
 
     def __init__(self, target_cfg: EngineConfig, draft_cfg: EngineConfig,
-                 gamma: int = 4, kv_mode: str = "fp16", kv_plan_path: str | None = None):
+                 gamma: int = 4, kv_mode: str = "fp16", kv_plan_path: str | None = None,
+                 target_engine: "QslabEngine | None" = None):
         assert gamma >= 1
         self.gamma = gamma
-        self.target = QslabEngine(target_cfg, kv_mode=kv_mode, kv_plan_path=kv_plan_path)
+        # inject a pre-built (possibly W4-swapped) target engine to avoid
+        # loading the full fp16 target twice on a single GPU
+        self.target = target_engine or QslabEngine(target_cfg, kv_mode=kv_mode,
+                                                   kv_plan_path=kv_plan_path)
         self.draft = QslabEngine(draft_cfg, kv_mode="fp16")
 
     @torch.inference_mode()

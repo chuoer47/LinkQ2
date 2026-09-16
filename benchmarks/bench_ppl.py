@@ -36,8 +36,10 @@ def gpu_snapshot() -> dict:
 
 
 @torch.inference_mode()
-def ppl_of_model(model, tok, texts: list[str], device: str) -> float:
-    """Standard sliding-window PPL over concatenated token stream."""
+def ppl_of_model(model, tok, texts: list[str], device: str,
+                 reset_fn=None) -> float:
+    """Standard sliding-window PPL over concatenated token stream.
+    reset_fn: optional per-window cache reset (engine-owned caches need it)."""
     nll_sum, n_tokens = 0.0, 0
     for text in texts:
         ids = tok.encode(text)
@@ -48,6 +50,8 @@ def ppl_of_model(model, tok, texts: list[str], device: str) -> float:
         for begin in range(0, len(ids) - 1, STRIDE):
             end = min(begin + WINDOW, len(ids))
             x = torch.tensor([ids[begin:end]], device=device)
+            if reset_fn is not None:
+                reset_fn()
             tgt_len = end - prev_end  # only count new tokens (first pass counts all)
             logits = model(input_ids=x).logits
             # predict x[1..] from x[:-1] within counted region
