@@ -35,7 +35,12 @@
 - [x] **抓出并修复重构引入的静默回归**：R2 的 sed 误伤把 loader 里 `_wrap_input_scale(mod, s)` 改成裸元组 `(mod, s)`（Python 合法但 no-op）→ load_w4_model 的 AWQ fold-back 全失效、输出乱码。oracle_alignment 恢复 True（2026-09-16）
 
 ### R5 测试与锁定
-- [ ] pytest 套件 + environment.yml + requirements.txt
+- [x] pytest 9.1.1 装入 qslab env；pytest.ini 定义 gpu/e2e 标记（2026-09-16）
+- [x] tests/test_unit_cpu.py（9 个，2.1s）：pack roundtrip / 注册表语义 / 采样数学 + 拒绝采样分布无损性
+- [x] tests/test_gpu_kernels.py（6 个，2.3s）：v1 kernel vs 反量化 matmul / 三 cache roundtrip 精度分级 / KV4 显存比 / KV4 奇数长度更新
+- [x] tests/test_e2e_engine.py（4 个，24s）：FP16 引擎 vs HF oracle / 三种投机模式无损性
+- [x] environment.yml（conda: nvcc12.4+gcc13）+ requirements.txt（pip 精确锁定 + flash-attn 来源说明）
+- [x] 全套 19 passed
 
 ### R6 文档
 - [ ] README + 架构文档（含 nano-vllm 整合与 M7 量化 paged attention 路线图）

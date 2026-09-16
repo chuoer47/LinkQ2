@@ -1,0 +1,102 @@
+"""CPU-fast unit tests: packing roundtrip, registry, sampling math."""
+from __future__ import annotations
+
+import pytest
+import torch
+
+from qslab.quant.packfmt import pack_w4, unpack_w4
+from qslab.registry import Registry
+
+
+class TestPackFormat:
+    """qslab_w4_v1 nibble packing must be a lossless container."""
+
+    def test_roundtrip_within_int4_grid(self):
+        torch.manual_seed(0)
+        O, I, g = 64, 512, 128
+        w = (torch.randn(O, I) * 0.02).to(torch.float16)
+        qfp, scale, zero = pack_w4(w, g)
+        w_hat = unpack_w4(qfp, scale, zero, I, g)
+        err = (w.float() - w_hat.float()).abs().max().item()
+        # int4 symmetric quantization error is bounded by half a step
+        assert err <= scale.max().item() / 2 + 1e-6
+
+    def test_symmetric_zero_field_is_zero(self):
+        torch.manual_seed(1)
+        w = (torch.randn(32, 256) * 0.05).to(torch.float16)
+        _qfp, _scale, zero = pack_w4(w, 128)
+        assert torch.equal(zero, torch.zeros_like(zero))
+
+    def test_pack_shape(self):
+        w = torch.zeros(64, 512, dtype=torch.float16)
+        qfp, scale, _ = pack_w4(w, 128)
+        assert qfp.shape == (64, 512 // 8)
+        assert scale.shape == (64, 512 // 128)
+        assert qfp.dtype == torch.uint32
+
+
+class TestRegistry:
+    def test_register_and_get(self):
+        r = Registry("thing")
+
+        @r.register("a")
+        class A:
+            pass
+
+        assert r.get("a") is A
+        assert "a" in r
+        assert r.names() == ["a"]
+
+    def test_duplicate_registration_rejected(self):
+        r = Registry("thing")
+
+        @r.register("dup")
+        class A:
+            pass
+
+        with pytest.raises(ValueError):
+            @r.register("dup")
+            class B:
+                pass
+
+    def test_unknown_name_lists_available(self):
+        r = Registry("thing")
+
+        @r.register("known")
+        class A:
+            pass
+
+        with pytest.raises(KeyError) as e:
+            r.get("missing")
+        assert "known" in str(e.value)
+
+
+class TestSamplingMath:
+    def test_greedy_is_argmax(self):
+        from qslab.sampler import sample_token
+        logits = torch.tensor([0.1, 3.0, 0.2])
+        assert sample_token(logits, temperature=0.0) == 1
+
+    def test_top_k_1_is_greedy(self):
+        from qslab.sampler import sample_token
+        logits = torch.tensor([5.0, 1.0, 1.0])
+        g = torch.Generator().manual_seed(0)
+        for _ in range(5):
+            assert sample_token(logits, temperature=1.0, top_k=1, generator=g) == 0
+
+    def test_rejection_sampling_is_distribution_lossless(self):
+        """The speculative accept/reject rule must reproduce the target law."""
+        from qslab.sampler import speculative_reject_sample
+        torch.manual_seed(0)
+        V = 40
+        q_logits = torch.randn(V)
+        p_logits = q_logits + 0.3 * torch.randn(V)     # draft != target
+        q = torch.softmax(q_logits, -1)
+        gen = torch.Generator().manual_seed(7)
+        counts = torch.zeros(V)
+        n = 20_000
+        for _ in range(n):
+            x, _acc = speculative_reject_sample(p_logits, q_logits, generator=gen)
+            counts[x] += 1
+        tv = 0.5 * (counts / counts.sum() - q).abs().sum().item()
+        assert tv < 0.03, f"distribution mismatch (tv={tv})"

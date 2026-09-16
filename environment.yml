@@ -1,0 +1,26 @@
+# qslab environment (conda + pip), reconstructed from the M0 setup notes.
+#
+#   conda env create -f environment.yml
+#
+# Three layers beyond conda's python:
+#   1. conda: the CUDA compiler toolchain (nvcc 12.4 + gcc 13 from conda-forge,
+#      because the host has no system CUDA and its gcc 14 is too new for nvcc 12.4)
+#   2. pip: torch 2.5.1+cu124 and friends (see requirements.txt)
+#   3. wheel: flash-attn 2.7.4, installed from a prebuilt wheel because building
+#      it from source needs hours and a lot of RAM
+name: qslab
+
+channels:
+  - conda-forge
+  - https://conda.anaconda.org/nvidia   # the tsinghua mirror 404s on nvidia
+
+dependencies:
+  - python=3.11
+  - pip
+  # CUDA toolkit for compiling the W4 kernels
+  - cuda-nvcc=12.4
+  # nvcc 12.4 supports gcc only up to 13
+  - gcc_linux-64=13
+  - gxx_linux-64=13
+  - pip:
+      - -r requirements.txt
