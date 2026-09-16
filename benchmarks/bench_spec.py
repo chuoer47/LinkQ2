@@ -16,7 +16,7 @@ import torch
 
 from qslab.config import EngineConfig
 from qslab.engine import QslabEngine
-from qslab.spec.verify import SpeculativeEngine
+from qslab.engine.spec import SpeculativeEngine
 from adapters.tokenizer import QwenTokenizerAdapter
 
 N_IN, N_DEC, ROUNDS = 512, 128, 5

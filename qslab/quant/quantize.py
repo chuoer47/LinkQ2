@@ -19,9 +19,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import torch
 
-from qslab.model.loader import load_reference_model, load_model_config
-from quantizer.packfmt import save_qslab_w4
-from quantizer.w4 import quantize_weight
+from qslab.models.loader import load_reference_model, load_model_config
+from qslab.quant.packfmt import save_qslab_w4
+from qslab.quant.w4 import quantize_weight
 
 TARGET_SUFFIXES = ("q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj")
 
@@ -56,7 +56,7 @@ def main():
         calib_meta = {"dataset": blob.get("dataset", "c4"),
                       "hash": hashlib.sha256(calib_path.read_bytes()).hexdigest()[:16],
                       "n_samples": len(calib_ids), "seq_len": len(calib_ids[0])}
-        from quantizer.calibrate import collect_activations
+        from qslab.quant.calibrate import collect_activations
         act_stats = collect_activations(model, calib_ids, device)
         print(f"calibration stats for {len(act_stats)} modules")
 

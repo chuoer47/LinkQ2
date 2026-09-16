@@ -75,7 +75,7 @@ def load_w4_model(model_path: Path | str, device: str = "cuda:0") -> torch.nn.Mo
     checkpoint (this is what the W4A16 kernel path must match in M1b).
     """
     import json as _json
-    from quantizer.packfmt import load_qslab_w4, unpack_w4
+    from qslab.quant.packfmt import load_qslab_w4, unpack_w4
 
     model_path = Path(model_path)
     config, st, _calib = load_qslab_w4(model_path)

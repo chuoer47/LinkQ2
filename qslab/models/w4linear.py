@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import torch
 
-from kernels.qslab_kernels.ops import w4a16_gemm
+from qslab.kernels.ops import w4a16_gemm
 
 
 class W4Linear(torch.nn.Module):
@@ -35,7 +35,7 @@ class W4Linear(torch.nn.Module):
         self._marlin = None
         if backend in ("marlin", "autodetect"):
             try:
-                from kernels.qslab_kernels.marlin_backend import pack_v1_to_marlin
+                from qslab.kernels.marlin_backend import pack_v1_to_marlin
                 B, s = pack_v1_to_marlin(qfp, scale, in_features, group_size)
                 self.register_buffer("marlin_B", B)   # int32 [I/16, O*2]
                 self.register_buffer("marlin_s", s)   # fp16 [I/g, O]
@@ -60,7 +60,7 @@ class W4Linear(torch.nn.Module):
         use_marlin = (self._marlin_ok and M > 8) if self.backend == "autodetect" \
             else self._marlin_ok
         if use_marlin:
-            from kernels.qslab_kernels.marlin_backend import marlin_gemm
+            from qslab.kernels.marlin_backend import marlin_gemm
             y = marlin_gemm(x2, self.marlin_B, self.marlin_s, self.marlin_ws)
         else:
             y = w4a16_gemm(self.qfp, self.scale, x2, self.group_size)
@@ -75,7 +75,7 @@ def swap_w4_linears(model: torch.nn.Module, packed_dir: str) -> int:
     """Replace quantized Linears with W4Linear using the packed checkpoint.
     Mirrors load_w4_model's weight mapping but keeps weights packed."""
     import json
-    from quantizer.packfmt import load_qslab_w4
+    from qslab.quant.packfmt import load_qslab_w4
 
     config, st, _calib = load_qslab_w4(packed_dir)
     group = config["group_size"]

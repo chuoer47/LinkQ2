@@ -15,8 +15,8 @@ import json
 import torch
 
 from qslab.config import EngineConfig
-from qslab.model.loader import load_reference_model, load_model_config
-from qslab.model.patched import patch_model
+from qslab.models.loader import load_reference_model, load_model_config
+from qslab.models.patched import patch_model
 
 
 class QslabEngine:
@@ -30,7 +30,7 @@ class QslabEngine:
         self.model = load_reference_model(cfg.model_path, device=self.device)
 
         # per-layer cache classes (M2): default all fp16, plan overrides
-        from qslab.cache.kv_cache import FP16KVCache, KV8Cache, KV4Cache
+        from qslab.quant.cache.kv_cache import FP16KVCache, KV8Cache, KV4Cache
         classes = {"fp16": FP16KVCache, "kv8": KV8Cache, "kv4": KV4Cache}
         assert kv_mode in classes, f"unknown kv_mode {kv_mode}"
         fp16_layers: set[int] = set()

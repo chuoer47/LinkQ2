@@ -15,8 +15,8 @@ PACKED = sys.argv[1] if len(sys.argv) > 1 else "models/Qwen3-1.7B-qslab-w4-awq2"
 
 from qslab.config import EngineConfig
 from qslab.engine import QslabEngine
-from qslab.model.loader import load_reference_model, load_model_config
-from qslab.model.w4linear import swap_w4_linears
+from qslab.models.loader import load_reference_model, load_model_config
+from qslab.models.w4linear import swap_w4_linears
 from adapters.tokenizer import QwenTokenizerAdapter
 
 tok = QwenTokenizerAdapter("models/Qwen3-1.7B")
@@ -30,7 +30,7 @@ eng = QslabEngine(cfg)
 n_swapped = swap_w4_linears(eng.model, PACKED)
 print(f"swapped {n_swapped} linears -> W4Linear (kernel path)")
 
-from qslab.model.loader import load_w4_model
+from qslab.models.loader import load_w4_model
 ref = load_w4_model(PACKED)
 all_match = True
 for p in prompts:

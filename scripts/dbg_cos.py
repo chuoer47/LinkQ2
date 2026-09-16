@@ -21,7 +21,7 @@ eng.prefill(ids)
 
 # call attention layer0 directly with the SAME hidden states that path B
 # would produce for tokens [12095, 13] at positions 5,6
-from qslab.model.patched import apply_rope
+from qslab.models.patched import apply_rope
 
 attn0 = eng.model.model.layers[0].self_attn
 

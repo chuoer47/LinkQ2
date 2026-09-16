@@ -8,7 +8,7 @@ import torch
 
 from qslab.config import EngineConfig
 from qslab.engine import QslabEngine
-from qslab.model.patched import PatchedQwen3Attention
+from qslab.models.patched import PatchedQwen3Attention
 from adapters.tokenizer import QwenTokenizerAdapter
 
 tok = QwenTokenizerAdapter("models/Qwen3-1.7B")

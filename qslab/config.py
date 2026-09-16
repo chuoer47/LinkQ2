@@ -37,7 +37,7 @@ class W4QuantConfig:
 
 @dataclass(frozen=True)
 class KVQuantConfig:
-    """KV cache quantization settings (M2). Plan comes from quantizer."""
+    """KV cache quantization settings (M2). Plan comes from qslab.quant."""
     enabled: bool = False
     kv_fp16_layers: tuple[int, ...] = ()   # layers kept at fp16
     k_quant: str = "per_channel"

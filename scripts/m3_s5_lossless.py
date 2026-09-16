@@ -10,7 +10,7 @@ import torch
 
 from qslab.config import EngineConfig
 from qslab.engine import QslabEngine
-from qslab.spec.verify import SpeculativeEngine
+from qslab.engine.spec.verify import SpeculativeEngine
 from adapters.tokenizer import QwenTokenizerAdapter
 
 GAMMA = int(sys.argv[1]) if len(sys.argv) > 1 else 4

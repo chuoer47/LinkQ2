@@ -7,7 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import torch
 
 from qslab.config import EngineConfig
-from qslab.spec.verify import SpeculativeEngine
+from qslab.engine.spec.verify import SpeculativeEngine
 from qslab.engine import QslabEngine
 from adapters.tokenizer import QwenTokenizerAdapter
 

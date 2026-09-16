@@ -12,7 +12,7 @@ def _get_mod():
     if _mod is None:
         from pathlib import Path
         import os
-        csrc = Path(__file__).resolve().parents[1] / "csrc"
+        csrc = Path(__file__).resolve().parent / "csrc"
         # wheel has libcudart.so.12 but no linker symlink (leetcuda pitfall #5)
         nvlib = Path(os.environ["CONDA_PREFIX"]) / "lib/python3.11/site-packages/nvidia/cuda_runtime/lib"
         if nvlib.exists():

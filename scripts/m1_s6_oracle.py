@@ -14,9 +14,9 @@ import torch
 
 from qslab.config import EngineConfig
 from qslab.engine import QslabEngine
-from qslab.model.loader import load_w4_model
+from qslab.models.loader import load_w4_model
 from adapters.tokenizer import QwenTokenizerAdapter
-from quantizer.packfmt import load_qslab_w4, unpack_w4
+from qslab.quant.packfmt import load_qslab_w4, unpack_w4
 
 PACKED = sys.argv[1] if len(sys.argv) > 1 else "models/Qwen3-1.7B-qslab-w4-awq2"
 
@@ -28,7 +28,7 @@ n_new = 32
 cfg = EngineConfig(model_path="models/Qwen3-1.7B", device="cuda:0", max_new_tokens=n_new)
 eng = QslabEngine(cfg)
 # re-point engine to packed weights: swap in dequantized weights
-from qslab.model.loader import _wrap_input_scale  # noqa
+from qslab.models.loader import _wrap_input_scale  # noqa
 import json as _json
 config, st, _ = load_qslab_w4(PACKED)
 group = config["group_size"]

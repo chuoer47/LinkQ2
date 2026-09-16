@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import torch
 
-from quantizer.packfmt import pack_w4
+from qslab.quant.packfmt import pack_w4
 
 
 @torch.no_grad()
@@ -39,7 +39,7 @@ def rtn_quantize_weight(w: torch.Tensor, group_size: int = 128,
 def _pack_from_q(q: torch.Tensor, scale: torch.Tensor, zero: torch.Tensor,
                  O: int, I: int):
     """Shared packing path given quantized int values [O, I/g, g]."""
-    from quantizer.packfmt import pack_w4  # noqa: F401  (format compat)
+    from qslab.quant.packfmt import pack_w4  # noqa: F401  (format compat)
     qn = q.view(O, I).to(torch.uint8) & 0xF
     qfp = torch.zeros(O, I // 8, dtype=torch.int64, device=q.device)
     for nib in range(8):

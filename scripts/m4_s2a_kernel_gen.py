@@ -8,7 +8,7 @@ import torch
 
 from qslab.config import EngineConfig
 from qslab.engine import QslabEngine
-from qslab.model.w4linear import swap_w4_linears
+from qslab.models.w4linear import swap_w4_linears
 from adapters.tokenizer import QwenTokenizerAdapter
 
 tok = QwenTokenizerAdapter("models/Qwen3-8B")

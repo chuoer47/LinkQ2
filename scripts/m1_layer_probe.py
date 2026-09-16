@@ -10,10 +10,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import torch
 
-from qslab.model.loader import load_reference_model
-from quantizer.calibrate import collect_activations
-from quantizer.w4 import rtn_quantize_weight, clip_search_quantize, awq_find_scales
-from quantizer.packfmt import unpack_w4
+from qslab.models.loader import load_reference_model
+from qslab.quant.calibrate import collect_activations
+from qslab.quant.w4 import rtn_quantize_weight, clip_search_quantize, awq_find_scales
+from qslab.quant.packfmt import unpack_w4
 
 PROBE_LAYERS = ["model.layers.0.self_attn.q_proj",
                 "model.layers.14.mlp.gate_proj",

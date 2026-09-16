@@ -16,7 +16,7 @@ import torch.nn.functional as F
 
 from transformers.models.qwen3.modeling_qwen3 import Qwen3Attention
 
-from qslab.cache.kv_cache import FP16KVCache
+from qslab.quant.cache.kv_cache import FP16KVCache
 
 
 class PatchedQwen3Attention(Qwen3Attention):

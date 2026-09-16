@@ -16,7 +16,7 @@ import json
 
 import torch
 
-from qslab.model.loader import load_reference_model
+from qslab.models.loader import load_reference_model
 
 N_PROBE_TOKENS = 512   # calib prefix length for profiling
 

@@ -6,7 +6,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import torch
 
-from qslab.model.loader import load_w4_model
+from qslab.models.loader import load_w4_model
 from adapters.tokenizer import QwenTokenizerAdapter
 
 tok = QwenTokenizerAdapter("models/Qwen3-8B")

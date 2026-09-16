@@ -2,9 +2,9 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import torch
-from quantizer.packfmt import pack_w4
-from kernels.qslab_kernels.marlin_backend import pack_v1_to_marlin, marlin_gemm
-from kernels.qslab_kernels.marlin_ext import get_marlin
+from qslab.quant.packfmt import pack_w4
+from qslab.kernels.marlin_backend import pack_v1_to_marlin, marlin_gemm
+from qslab.kernels.marlin_ext import get_marlin
 get_marlin()
 G = 128
 torch.manual_seed(0)

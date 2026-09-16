@@ -13,10 +13,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import torch
 
-from quantizer.packfmt import pack_w4, unpack_w4
-from kernels.qslab_kernels.marlin_backend import pack_v1_to_marlin, marlin_gemm
-from kernels.qslab_kernels.marlin_ext import get_marlin
-from kernels.qslab_kernels.ops import w4a16_gemm
+from qslab.quant.packfmt import pack_w4, unpack_w4
+from qslab.kernels.marlin_backend import pack_v1_to_marlin, marlin_gemm
+from qslab.kernels.marlin_ext import get_marlin
+from qslab.kernels.ops import w4a16_gemm
 
 get_marlin()
 

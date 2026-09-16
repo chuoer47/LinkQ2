@@ -12,7 +12,7 @@ import torch
 
 packed_dir = sys.argv[1] if len(sys.argv) > 1 else "models/Qwen3-1.7B-qslab-w4-rtn"
 
-from qslab.model.loader import load_w4_model, load_reference_model
+from qslab.models.loader import load_w4_model, load_reference_model
 from adapters.tokenizer import QwenTokenizerAdapter
 from benchmarks.bench_ppl import ppl_of_model
 
