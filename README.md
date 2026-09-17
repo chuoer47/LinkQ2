@@ -155,7 +155,8 @@ notes/           eight milestone write-ups with raw numbers
 docs/            design decisions and the milestone protocol
 results/         committed result JSONs (logs and checkpoints are gitignored)
 scripts/         environment/kernel build scripts; archive/ holds one-off experiments
-third_party/     cutlass + marlin checkouts (gitignored)
+third_party/     marlin checkout (gitignored; the CUTLASS route was
+                 evaluated and rejected — sm89 has no mixed-input collective)
 ```
 
 ---

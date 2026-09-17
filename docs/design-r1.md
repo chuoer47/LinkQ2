@@ -61,7 +61,7 @@ benchmarks/                      # 评测入口（保留，R4 重构）
 tests/                          # pytest（R5）
 scripts/                        # 只保留构建/环境脚本（R4 清理）
 notes/ results/ docs/            # 保留
-third_party/                     # cutlass/marlin（gitignore）
+third_party/                     # marlin（gitignore；cutlass 评估后弃用，sm89 无 mixed-input collective）
 ```
 
 ## 依赖规则（铁律，R1 落地并在 R5 用测试固化）
