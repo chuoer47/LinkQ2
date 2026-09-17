@@ -8,12 +8,15 @@ from __future__ import annotations
 import json
 
 from qslab.quant.cache.kv_cache import FP16KVCache, KV4Cache, KV8Cache
+from qslab.quant.cache.kv4_paged import KV4PagedCache
 from qslab.quant.kv_strategies import KV_STRATEGIES
 
 
 class _StrategyBase:
     #: class from qslab.quant.cache used for quantized layers
     cache_cls = None
+    #: extra kwargs forwarded to the cache constructor
+    cache_kwargs: dict = {}
     name = "base"
     is_quantized = False
 
@@ -25,7 +28,7 @@ class _StrategyBase:
               head_dim: int, max_len: int, device: str):
         cls = FP16KVCache if (not self.is_quantized or layer_idx in self.fp16_layers) \
             else self.cache_cls
-        kwargs = {} if cls is FP16KVCache else {"group": self.group}
+        kwargs = {} if cls is FP16KVCache else {"group": self.group, **self.cache_kwargs}
         return cls(batch=batch, num_kv_heads=num_kv_heads, head_dim=head_dim,
                    max_len=max_len, device=device, **kwargs)
 
@@ -48,6 +51,15 @@ class KV4Strategy(_StrategyBase):
     name = "kv4"
     is_quantized = True
     cache_cls = KV4Cache
+
+
+@KV_STRATEGIES.register("kv4.paged")
+class KV4PagedStrategy(KV4Strategy):
+    """KV4 stored in fixed-size blocks; attention reads int4 directly (M7)."""
+
+    name = "kv4.paged"
+    cache_cls = KV4PagedCache
+    cache_kwargs = {"block_n": 128}
 
 
 @KV_STRATEGIES.register("kv4.plan")

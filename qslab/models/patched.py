@@ -75,11 +75,29 @@ class PatchedQwen3Attention(Qwen3Attention):
         query_states, key_states = apply_rope(query_states, key_states, cos, sin)
 
         # --- engine-owned cache update ---
+        #
+        # Two cache paths (M7):
+        #   * paged int4: decode (T_q == 1) reads the packed blocks directly in
+        #     a Triton kernel, so no dense fp16 copy of the cache is ever made.
+        #     Prefill still goes through the dense view -- the paged kernel is
+        #     an M=1 design and would re-read the context once per query token.
+        #   * everything else: dense fp16 view, as before.
+        from qslab.quant.cache.kv4_paged import KV4PagedCache
+        T_q = query_states.shape[2]
+        if isinstance(self.engine_cache, KV4PagedCache) and T_q == 1:
+            # append first: the query token's own K/V must be in the cache
+            # before attention reads it (causal attention includes self)
+            self.engine_cache.append(key_states, value_states)
+            q_hd = query_states[0, :, 0, :]                  # [H, D]
+            out = self.engine_cache.attention(q_hd, self.scaling)   # [H, D]
+            attn_output = out[None, :, None, :]              # [1, H, 1, D]
+            attn_output = attn_output.transpose(1, 2).reshape(*input_shape, -1)
+            return self.o_proj(attn_output), None
+
         k_full, v_full = self.engine_cache.update(key_states, value_states)
 
         # GQA attention via SDPA (enable_gqa avoids materializing repeated KV;
         # memory-efficient backend keeps attn weights unmaterialized).
-        T_q = query_states.shape[2]
         T_k = k_full.shape[2]
         if T_q == T_k:
             # whole-sequence prefill: plain causal

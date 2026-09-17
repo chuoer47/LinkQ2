@@ -21,10 +21,12 @@ import triton.language as tl
 def kv4_paged_attention_kernel(
     q_ptr, kq_ptr, ks_ptr, vq_ptr, vs_ptr, bt_ptr, out_ptr, context_len,
     H: tl.constexpr, D: tl.constexpr,
+    N_Q_HEADS: tl.constexpr, N_KV_HEADS: tl.constexpr,
     BLOCK_N: tl.constexpr, GROUP: tl.constexpr, SCALE: tl.constexpr,
     PACK_G: tl.constexpr = 8,
 ):
-    head = tl.program_id(0)
+    head = tl.program_id(0)                      # query head index
+    kv_head = head // (N_Q_HEADS // N_KV_HEADS)  # GQA mapping
     n_blocks = tl.cdiv(context_len, BLOCK_N)
     offs_d = tl.arange(0, D)
     offs_n = tl.arange(0, BLOCK_N)
@@ -39,15 +41,15 @@ def kv4_paged_attention_kernel(
     l_i = 0.0
     acc = tl.zeros([D], dtype=tl.float32)
 
-    k_base = head * D * n_words_k
-    ks_base = head * D * n_groups_k
-    v_base = head * BLOCK_N * n_words_v
-    vs_base = head * BLOCK_N * n_groups_v
+    k_base = kv_head * D * n_words_k
+    ks_base = kv_head * D * n_groups_k
+    v_base = kv_head * BLOCK_N * n_words_v
+    vs_base = kv_head * BLOCK_N * n_groups_v
 
     for b in range(n_blocks):
         blk = tl.load(bt_ptr + b)
-        s_base = blk * H * D * n_words_k
-        ss_base = blk * H * D * n_groups_k
+        s_base = blk * N_KV_HEADS * D * n_words_k
+        ss_base = blk * N_KV_HEADS * D * n_groups_k
 
         # ---- K tile: [D, BLOCK_N], dequantized word-by-word ----
         # Load all K words as [D, BLOCK_N/8] and expand to [D, BLOCK_N].
@@ -82,8 +84,8 @@ def kv4_paged_attention_kernel(
         l_i = l_i * alpha + tl.sum(p, axis=0)
 
         # ---- V tile: [BLOCK_N, D], dequantized word-by-word ----
-        v_base_b = blk * H * BLOCK_N * n_words_v
-        vs_base_b = blk * H * BLOCK_N * n_groups_v
+        v_base_b = blk * N_KV_HEADS * BLOCK_N * n_words_v
+        vs_base_b = blk * N_KV_HEADS * BLOCK_N * n_groups_v
         vq = tl.load(vq_ptr + v_base_b + v_base
                      + offs_n[:, None] * n_words_v + tl.arange(0, n_words_v)[None, :])
         vs = tl.load(vs_ptr + vs_base_b + vs_base
@@ -108,15 +110,22 @@ def kv4_paged_attention_kernel(
 
 def kv4_paged_attention(q: torch.Tensor, k_cache, v_cache,
                         block_table: torch.Tensor, context_len: int,
-                        block_n: int = 128, group: int = 64) -> torch.Tensor:
-    """q [H, D] fp16 -> out [H, D] fp16. Caches are (packed, scales) tuples."""
-    H, D = q.shape
-    out = torch.empty(H, D, dtype=torch.float16, device=q.device)
+                        block_n: int = 128, group: int = 64,
+                        num_kv_heads: int | None = None) -> torch.Tensor:
+    """q [N_Q_HEADS, D] fp16 -> out [N_Q_HEADS, D] fp16.
+
+    GQA: query head h reads kv head h // (N_Q_HEADS // N_KV_HEADS).
+    Caches are (packed, scales) tuples.
+    """
+    N_Q, D = q.shape
+    n_kv = num_kv_heads if num_kv_heads is not None else N_Q
+    out = torch.empty(N_Q, D, dtype=torch.float16, device=q.device)
     kq, ks = k_cache
     vq, vs = v_cache
-    kv4_paged_attention_kernel[(H,)](
+    kv4_paged_attention_kernel[(N_Q,)](
         q, kq, ks, vq, vs, block_table, out, context_len,
-        H=H, D=D, BLOCK_N=block_n, GROUP=group, SCALE=1.0 / (D ** 0.5),
+        H=N_Q, D=D, N_Q_HEADS=N_Q, N_KV_HEADS=n_kv,
+        BLOCK_N=block_n, GROUP=group, SCALE=1.0 / (D ** 0.5),
         PACK_G=8,
     )
     return out
