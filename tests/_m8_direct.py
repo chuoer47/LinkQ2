@@ -36,7 +36,7 @@ def dequant(packed, scales):
     q = packed.view(rows, H_KV, D // 8).to(torch.int64) & 0xFFFFFFFF
     shifts = (torch.arange(8, device=DEV) * 4)[None, None, None, :]
     nibs = ((q[:, :, :, None] >> shifts) & 0xF).to(torch.int32)
-    nibs = torch.where(nibs >= 8, nibs - 16, nibs).float()
+    nibs = (nibs - 8).float()
     sc = scales.view(rows, H_KV).float()[:, :, None, None]
     return (nibs * sc).reshape(rows, H_KV, D)
 

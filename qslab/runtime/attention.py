@@ -4,13 +4,15 @@ Keeps nano-vllm's structure (global Context set per step by the model runner,
 slot_mapping-driven KV writes) and replaces the decode read path with qslab's
 int4 kernel. The PagedAttention layer owns per-layer views into the runtime's
 quantized KV pool.
+
+Ordering follows nano-vllm: store BEFORE attention. decode's context_lens
+includes the token being processed, so its KV must already sit in its slot
+when the kernel reads the cache.
 """
 from __future__ import annotations
 
 import torch
 from torch import nn
-import triton
-import triton.language as tl
 
 from flash_attn import flash_attn_varlen_func
 
@@ -39,10 +41,19 @@ class PagedAttention(nn.Module):
         ctx = get_context()
         k_cache, v_cache = self.k_cache, self.v_cache
 
+        # store FIRST (nano-vllm ordering): the decode kernel reads the
+        # current token's own KV from the pool (context_lens includes it).
+        if k_cache is not None and v_cache is not None:
+            n_tokens = k.shape[0]
+            if n_tokens > 0:
+                store_kv_quant(k.view(n_tokens, self.num_kv_heads, self.head_dim),
+                               v.view(n_tokens, self.num_kv_heads, self.head_dim),
+                               k_cache, v_cache,
+                               ctx.slot_mapping.view(n_tokens))
+
         if ctx.is_prefill:
-            # prefill: attention over the fp16 q/k/v directly (varlen, causal),
-            # then the KV gets quantized into slots by the store pass below
-            hidden = q.shape[0] * q.shape[1] if q.dim() == 3 else q.shape[0]
+            # prefill: attention over the fp16 q/k/v directly (varlen, causal);
+            # the KV has been quantized into slots above for later decode reads
             o = flash_attn_varlen_func(
                 q.view(-1, self.num_heads, self.head_dim),
                 k.view(-1, self.num_kv_heads, self.head_dim),
@@ -55,22 +66,19 @@ class PagedAttention(nn.Module):
                 causal=True,
             )
         else:
-            # decode: q is [1, H, D] for this token; the cache is int4 packed
-            # and the kernel dequantizes tiles on the fly
+            # decode: q is [bs, H, D]; the cache is int4 packed and the kernel
+            # dequantizes tiles on the fly
             assert k_cache is not None and v_cache is not None
-            q1 = q[0]                             # [H, D]
-            o = paged_attention_decode(
-                q1, k_cache, v_cache, ctx.block_tables[0],
-                int(ctx.context_lens[0]), block_n=self.block_n,
-                num_kv_heads=self.num_kv_heads)
-            o = o.unsqueeze(0)                    # [1, H, D]
-
-        # quantize-and-store the current step's K/V into their slots
-        if k_cache is not None and v_cache is not None:
-            n_tokens = k.shape[0]
-            if n_tokens > 0:
-                store_kv_quant(k.view(n_tokens, self.num_kv_heads, self.head_dim),
-                               v.view(n_tokens, self.num_kv_heads, self.head_dim),
-                               k_cache, v_cache,
-                               ctx.slot_mapping.view(n_tokens))
+            bs = q.shape[0]
+            if bs == 1:
+                o = paged_attention_decode(
+                    q[0], k_cache, v_cache, ctx.block_tables[0],
+                    int(ctx.context_lens[0]), block_n=self.block_n,
+                    num_kv_heads=self.num_kv_heads)
+                o = o.unsqueeze(0)                # [1, H, D]
+            else:
+                o = paged_attention_decode_batched(
+                    q, k_cache, v_cache, ctx.block_tables,
+                    ctx.context_lens, block_n=self.block_n,
+                    num_kv_heads=self.num_kv_heads)
         return o

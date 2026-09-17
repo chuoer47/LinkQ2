@@ -103,7 +103,7 @@ def kv4_paged_decode_kernel(
         shifts = tl.arange(0, PACK_G)[None, :] * 4
         k_shifts = tl.arange(0, PACK_G)[None, None, :] * 4
         k_nib = ((kq[:, :, None] >> k_shifts) & 0xF).to(tl.int32)
-        k_nib = tl.where(k_nib >= 8, k_nib - 16, k_nib).to(tl.float32)
+        k_nib = (k_nib - 8).to(tl.float32)
         k_deq = tl.reshape(k_nib * ks[:, None, None], (BLOCK_N, D))
 
         s = tl.sum(q[None, :] * k_deq, axis=1) * SCALE
@@ -120,7 +120,7 @@ def kv4_paged_decode_kernel(
         vs = tl.load(vs_ptr + rows * N_KV_HEADS + kv_head).to(tl.float32)
         v_shifts = tl.arange(0, PACK_G)[None, None, :] * 4
         v_nib = ((vq[:, :, None] >> v_shifts) & 0xF).to(tl.int32)
-        v_nib = tl.where(v_nib >= 8, v_nib - 16, v_nib).to(tl.float32)
+        v_nib = (v_nib - 8).to(tl.float32)
         v_deq = tl.reshape(v_nib * vs[:, None, None], (BLOCK_N, D))
 
         acc = acc * alpha + tl.sum(p[:, None] * v_deq, axis=0)
