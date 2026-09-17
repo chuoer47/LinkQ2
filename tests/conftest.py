@@ -40,3 +40,25 @@ def has_cuda() -> bool:
 @pytest.fixture(scope="session")
 def has_small_model() -> bool:
     return SMALL_MODEL.exists() and SMALL_W4.exists()
+
+
+@pytest.fixture(autouse=True)
+def _release_gpu_between_modules(request):
+    """Engine-holding test modules take turns on one 24 GB card.
+
+    Each module is torn down before the next one builds its engine, because
+    two 1.7B engines plus their KV pools do not co-reside. Threading the
+    cleanup through a module-scoped autouse fixture keeps it out of the
+    individual tests.
+    """
+    yield
+    if request.node.get_closest_marker("e2e") is None:
+        return
+    import gc
+    try:
+        import torch
+        gc.collect()
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+    except Exception:
+        pass

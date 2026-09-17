@@ -29,7 +29,12 @@ class LLMEngine:
         atexit.register(self.exit)
 
     def exit(self):
-        self.model_runner.call("exit")
+        # idempotent: atexit fires this after a test may already have released
+        # the runner to free the card for the next module
+        runner = getattr(self, "model_runner", None)
+        if runner is None:
+            return
+        runner.call("exit")
         del self.model_runner
 
     def add_request(self, prompt: str | list[int], sampling_params: SamplingParams):

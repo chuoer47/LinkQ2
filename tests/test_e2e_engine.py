@@ -33,12 +33,33 @@ def oracle():
     return ids, out[0][len(ids):].tolist()
 
 
+def free_engine(eng):
+    """Release the model and the KV pool, then hand the memory back.
+
+    Only one engine fits on the card at a time, so a module must drop its own
+    before the next e2e module builds one.
+    """
+    import gc
+    runner = eng.model_runner
+    for layer in runner.model.model.layers:
+        a = layer.self_attn.attn
+        a.k_cache = a.v_cache = None
+        a.lam = a.lam_q = None
+    runner.model = None
+    runner.kv_cache = None
+    del eng.model_runner
+    gc.collect()
+    torch.cuda.empty_cache()
+    torch.cuda.synchronize()
+
+
 @pytest.fixture(scope="module")
 def engine():
     eng = LLMEngine(model=MODEL, max_model_len=4096, max_num_seqs=8,
-                    enforce_eager=True, gpu_memory_utilization=0.5,
+                    enforce_eager=True, gpu_memory_utilization=0.35,
                     smooth_kv=CALIB)
     yield eng
+    free_engine(eng)
 
 
 def test_greedy_matches_hf(engine, oracle):
