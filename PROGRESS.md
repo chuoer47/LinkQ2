@@ -87,7 +87,15 @@ R0-R6 全部完成。仓库从"按里程碑堆叠的研究代码"变为五层分
       QServe SmoothAttention `λ_i=max|K_i|^0.5`（且 λ_d=λ_{d+D/2} 以与 RoPE 交换）
 - [x] 验收：**1.7B e2e 与 HF oracle 逐 token 一致**；KV 池 6.92 GiB（fp16 需 13.84，**2×**）；
       全套 20 测试通过
-- [ ] M8-s3 CUDA Graph 实测（`enforce_eager=False`）/ 连续批吞吐 / 8B 验收
+- [x] M8-s3 **CUDA Graph 实测通过**：捕获 bs=[1,2,4,8] 4 个桶，输出与 oracle 逐 token
+      一致（静态 per-channel K scale 的设计目标兑现：写入纯 slot 驱动）；
+      decode 吞吐 batch1/128tok **22.8 → 148.7 tok/s（6.5×）**；
+      8 路连续批 64tok **286.7 → 1048.2 tok/s**
+- [x] M8-s3 批处理正确性归因（单条 vs 批处理有差异，逐项排除后判定非缺陷）：
+      flash-attn varlen 打包 **Δ=0**；我们 batched logits vs HF batched **top-1 8/8**；
+      输出不依赖同伴内容；内核重放 **Δ=0**；**HF 自己 solo vs batched 同样漂移
+      0.021~0.033**。根因是批大小改变 GEMM 的 M 维 → cuBLAS 换 tiling → 归约顺序变
+- [ ] 8B 验收
 - [ ] M8-s4 W4 权重接入 runtime 加载路径（现只读 HF safetensors）；前缀缓存验证
 
 ### 行为无回归基线（每阶段复测）
