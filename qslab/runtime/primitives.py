@@ -18,7 +18,6 @@ class RMSNorm(nn.Module):
         self.eps = eps
         self.weight = nn.Parameter(torch.ones(hidden_size))
 
-    @torch.compile
     def rms_forward(self, x: torch.Tensor) -> torch.Tensor:
         orig_dtype = x.dtype
         x = x.float()
@@ -27,7 +26,6 @@ class RMSNorm(nn.Module):
         x = x.to(orig_dtype).mul_(self.weight)
         return x
 
-    @torch.compile
     def add_rms_forward(self, x: torch.Tensor, residual: torch.Tensor):
         orig_dtype = x.dtype
         x = x.float().add_(residual.float())
@@ -44,7 +42,6 @@ class RMSNorm(nn.Module):
 
 
 class SiluAndMul(nn.Module):
-    @torch.compile
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x, y = x.chunk(2, -1)
         return F.silu(x) * y

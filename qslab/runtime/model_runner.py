@@ -25,7 +25,7 @@ class ModelRunner:
 
         torch.cuda.set_device(rank)
         default_dtype = torch.get_default_dtype()
-        torch.set_default_dtype(hf_config.dtype)
+        torch.set_default_dtype(torch.float16)  # qslab: fp16 everywhere (int4 kernel is fp16)
         torch.set_default_device("cuda")
         self.model = Qwen3ForCausalLM(hf_config)
         load_model(self.model, config.model)
@@ -46,7 +46,7 @@ class ModelRunner:
         if not self.enforce_eager:
             del self.graphs, self.graph_pool
         torch.cuda.synchronize()
-        dist.destroy_process_group()
+        pass  # single-GPU: no process group
 
     def loop(self):
         while True:
@@ -101,21 +101,24 @@ class ModelRunner:
         current = torch.cuda.memory_stats()["allocated_bytes.all.current"]
         num_kv_heads = hf_config.num_key_value_heads
         head_dim = getattr(hf_config, "head_dim", hf_config.hidden_size // hf_config.num_attention_heads)
-        # per slot: k_q D/8 u32 + k_s f16 + v_q D/8 u32 + v_s f16 = 2*D bytes
+        # per slot (= one token): H heads x (k_q D/8 u32 + k_s f16
+        #                            + v_q D/8 u32 + v_s f16) = 2*D bytes
         slot_bytes = 2 * head_dim
         block_bytes = hf_config.num_hidden_layers * self.block_size * num_kv_heads * slot_bytes
         config.num_kvcache_blocks = int(total * config.gpu_memory_utilization - used - peak + current) // block_bytes
         assert config.num_kvcache_blocks > 0
         nl, nb = hf_config.num_hidden_layers, config.num_kvcache_blocks
-        nw = head_dim // 8
-        total_slots = nb * self.block_size * num_kv_heads
-        # pool: per layer, two (packed, scales) tuples
+        total_slots = nb * self.block_size                     # one slot per token
         self.kv_cache = []
         for _ in range(nl):
-            kq = torch.zeros(total_slots, nw, dtype=torch.uint32, device="cuda")
-            ks = torch.zeros(total_slots, dtype=torch.float16, device="cuda")
-            vq = torch.zeros(total_slots, nw, dtype=torch.uint32, device="cuda")
-            vs = torch.zeros(total_slots, dtype=torch.float16, device="cuda")
+            kq = torch.zeros(total_slots, num_kv_heads, head_dim // 8,
+                             dtype=torch.uint32, device="cuda")
+            ks = torch.zeros(total_slots, num_kv_heads,
+                             dtype=torch.float16, device="cuda")
+            vq = torch.zeros(total_slots, num_kv_heads, head_dim // 8,
+                             dtype=torch.uint32, device="cuda")
+            vs = torch.zeros(total_slots, num_kv_heads,
+                             dtype=torch.float16, device="cuda")
             self.kv_cache.append(((kq, ks), (vq, vs)))
         layer_id = 0
         for module in self.model.modules():
@@ -199,7 +202,16 @@ class ModelRunner:
     @torch.inference_mode()
     def run_model(self, input_ids: torch.Tensor, positions: torch.Tensor, is_prefill: bool):
         if is_prefill or self.enforce_eager or input_ids.size(0) > 512:
-            return self.model.compute_logits(self.model(input_ids, positions))
+            hidden = self.model(input_ids, positions)
+            if is_prefill:
+                # only the last token of each scheduled sequence produces logits
+                # (sampling happens at sequence boundaries); gathering all
+                # positions would break the per-seq temperature broadcast
+                cu = get_context().cu_seqlens_q
+                last_idx = (cu[1:] - 1) if cu is not None else torch.tensor(
+                    [hidden.size(0) - 1], device=hidden.device)
+                hidden = hidden[last_idx]
+            return self.model.compute_logits(hidden)
         else:
             bs = input_ids.size(0)
             context = get_context()

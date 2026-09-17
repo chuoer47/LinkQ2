@@ -15,9 +15,7 @@ import triton.language as tl
 from flash_attn import flash_attn_varlen_func
 
 from qslab.runtime.context import get_context
-
-from qslab.runtime.attention_store import store_kv_quant
-from qslab.runtime.paged_decode import paged_attention_decode
+from qslab.runtime.paged_decode import store_kv_quant, paged_attention_decode
 
 
 class PagedAttention(nn.Module):
@@ -74,5 +72,5 @@ class PagedAttention(nn.Module):
                 store_kv_quant(k.view(n_tokens, self.num_kv_heads, self.head_dim),
                                v.view(n_tokens, self.num_kv_heads, self.head_dim),
                                k_cache, v_cache,
-                               ctx.slot_mapping.view(n_tokens, self.num_kv_heads))
+                               ctx.slot_mapping.view(n_tokens))
         return o
