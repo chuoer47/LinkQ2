@@ -86,3 +86,30 @@ swap 时把 qkv_proj 当三个独立 Linear 分别量化（`packed_modules_mappi
   时 M 固定为 graph_bs ✓ 无动态分派风险
 - **transformers 版本**：nano-vllm 用 transformers 的 Config/模型类名，我们
   4.57.6 ✓
+
+---
+
+## 追加（M8-S2 实测后）：K/V 的量化方案定版
+
+原设计沿用 `attention_store.py` 的 **per-token per-head** 方案。实测**推翻**：
+
+- Qwen3 的 K 在 `k_norm + RoPE` 后有**固定离群通道**（layer0 amax 313 / 均值 2.8）
+- per-token 量化下步长被离群拉大，99% 通道被压成 0，相对误差 **23%**，decode 即崩
+- 同精度下 per-channel 只有 3.6%
+
+**定版方案**（对齐 KIVI / QServe，见 `notes/M8-整合.md` 的调研表）：
+
+| | 量化 | scale | CUDA Graph |
+|---|---|---|---|
+| **K** | int4，per-channel | **静态**（离线校准冻结 `[H,D]`） | ✅ 写入纯 slot 驱动 |
+| **V** | int4，per-token group=64 | 动态（`[slots,H,D/64]`） | ✅ 离群是 token 局部的 |
+
+理由：per-channel 的动态 scale 必须在旧 token 到达新 token 时重算，写入地址即依赖
+数据，graph 捕获不成立。用**离线校准**（SmoothAttention 压平离群 + 冻结 scale）
+换取"写入纯 slot 驱动"。V 无此约束，保持动态分组。
+
+前置步骤：`scripts/build_smooth_kv.py` 产出 `λ[H,D]` 与 `kscale[H,D]`；
+λ 在 attention 内做 `q*=λ, k/=λ`（norm 权重按头共享，折不进去）。
+
+**验收**：1.7B e2e 与 HF oracle 逐 token 一致；KV 池 6.92 GiB（fp16 需 13.84）。
+**未覆盖**：CUDA Graph 尚未实测（设计上兼容）、连续批吞吐、W4 权重进 runtime。
