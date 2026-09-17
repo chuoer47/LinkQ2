@@ -8,6 +8,12 @@ quantized KV pool.
 Ordering follows nano-vllm: store BEFORE attention. decode's context_lens
 includes the token being processed, so its KV must already sit in its slot
 when the kernel reads the cache.
+
+SmoothAttention (optional, from a calibration file): q *= lambda and
+k /= lambda, applied after RoPE. The attention logits are unchanged, but K's
+per-channel outliers are flattened so a single static int4 scale per channel
+suffices. lambda is per KV head; on the query side it is broadcast across each
+head's GQA group.
 """
 from __future__ import annotations
 
@@ -23,33 +29,57 @@ from qslab.runtime.paged_decode import store_kv_quant, paged_attention_decode
 class PagedAttention(nn.Module):
     """One attention layer's interface into the quantized paged KV pool.
 
-    k_cache/v_cache are (packed_u32, scales_fp16) tuples for this layer,
-    attached by the model runner's allocate_kv_cache.
+    k_cache/v_cache are (packed_u32, scales) tuples for this layer, attached
+    by the model runner's allocate_kv_cache. When k_scale is the static table
+    (shape [H_kv, D]) the K store/dedcode path uses a frozen per-channel
+    scale; otherwise it falls back to a dynamic per-token scale.
     """
 
     def __init__(self, num_heads: int, head_dim: int, scale: float,
-                 num_kv_heads: int, block_n: int = 128):
+                 num_kv_heads: int, block_n: int = 128, v_group: int = 64):
         super().__init__()
         self.num_heads = num_heads
         self.head_dim = head_dim
         self.scale = scale
         self.num_kv_heads = num_kv_heads
         self.block_n = block_n
+        self.v_group = v_group
         self.k_cache = self.v_cache = None      # (packed, scales) tuples
+        self.lam = None                         # [H_kv, D] SmoothAttention
+        self.lam_q = None                       # [H_q, D] GQA-expanded
+
+    def set_smooth_lambda(self, lam: torch.Tensor):
+        """lam [H_kv, D] from the calibration file."""
+        self.lam = lam
+        n_rep = self.num_heads // self.num_kv_heads
+        self.lam_q = lam.repeat_interleave(n_rep, dim=0).contiguous()
 
     def forward(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor):
         ctx = get_context()
         k_cache, v_cache = self.k_cache, self.v_cache
+
+        if self.lam is not None:
+            # (Q*L)(K/L)^T leaves the logits unchanged; only the quantization
+            # difficulty of K moves. Done after RoPE, so the encoder sees the
+            # smoothed key.
+            q = (q * self.lam_q.to(q.dtype))
+            k = (k / self.lam.to(k.dtype))
 
         # store FIRST (nano-vllm ordering): the decode kernel reads the
         # current token's own KV from the pool (context_lens includes it).
         if k_cache is not None and v_cache is not None:
             n_tokens = k.shape[0]
             if n_tokens > 0:
-                store_kv_quant(k.view(n_tokens, self.num_kv_heads, self.head_dim),
-                               v.view(n_tokens, self.num_kv_heads, self.head_dim),
+                # v arrives as a slice of the fused qkv projection and is NOT
+                # contiguous (row stride = the full qkv width); the store
+                # kernel indexes rows as idx*H*D, so it must be packed first.
+                # flash-attn handles strides itself, which is why prefill was
+                # unaffected while every stored V row was garbage.
+                store_kv_quant(k.view(n_tokens, self.num_kv_heads, self.head_dim).contiguous(),
+                               v.view(n_tokens, self.num_kv_heads, self.head_dim).contiguous(),
                                k_cache, v_cache,
-                               ctx.slot_mapping.view(n_tokens))
+                               ctx.slot_mapping.view(n_tokens),
+                               v_group=self.v_group)
 
         if ctx.is_prefill:
             # prefill: attention over the fp16 q/k/v directly (varlen, causal);
@@ -69,16 +99,9 @@ class PagedAttention(nn.Module):
             # decode: q is [bs, H, D]; the cache is int4 packed and the kernel
             # dequantizes tiles on the fly
             assert k_cache is not None and v_cache is not None
-            bs = q.shape[0]
-            if bs == 1:
-                o = paged_attention_decode(
-                    q[0], k_cache, v_cache, ctx.block_tables[0],
-                    int(ctx.context_lens[0]), block_n=self.block_n,
-                    num_kv_heads=self.num_kv_heads)
-                o = o.unsqueeze(0)                # [1, H, D]
-            else:
-                o = paged_attention_decode_batched(
-                    q, k_cache, v_cache, ctx.block_tables,
-                    ctx.context_lens, block_n=self.block_n,
-                    num_kv_heads=self.num_kv_heads)
+            o = paged_attention_decode(
+                q, k_cache, v_cache, ctx.block_tables, ctx.context_lens,
+                block_n=self.block_n, num_kv_heads=self.num_kv_heads,
+                k_scale=self.k_cache[1] if k_cache[1].dim() == 2 else None,
+                v_group=self.v_group)
         return o

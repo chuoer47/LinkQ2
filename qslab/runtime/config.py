@@ -16,6 +16,8 @@ class Config:
     eos: int = -1
     kvcache_block_size: int = 128
     num_kvcache_blocks: int = -1
+    v_group: int = 64              # V quant group size along head_dim
+    smooth_kv: str | None = None   # SmoothAttention calibration file
 
     def __post_init__(self):
         assert os.path.isdir(self.model)

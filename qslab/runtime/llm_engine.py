@@ -5,7 +5,7 @@ from tqdm.auto import tqdm
 from transformers import AutoTokenizer
 import torch.multiprocessing as mp
 
-from qslab.runtime.config import Config
+from qslab.runtime.config import Config  # noqa: F401
 from qslab.runtime.sampling_params import SamplingParams
 from qslab.runtime.sequence import Sequence
 from qslab.runtime.scheduler import Scheduler
@@ -17,6 +17,7 @@ class LLMEngine:
     def __init__(self, model, **kwargs):
         config_fields = {field.name for field in fields(Config)}
         config_kwargs = {k: v for k, v in kwargs.items() if k in config_fields}
+        # llama-style naming: `model` is positional, everything else by field
         config = Config(model, **config_kwargs)
         Sequence.block_size = config.kvcache_block_size
         # qslab: single-GPU runtime; nano-vllm's TP worker processes removed.

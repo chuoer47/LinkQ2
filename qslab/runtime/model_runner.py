@@ -96,28 +96,42 @@ class ModelRunner:
         config = self.config
         hf_config = config.hf_config
         free, total = torch.cuda.mem_get_info()
-        used = total - free
         peak = torch.cuda.memory_stats()["allocated_bytes.all.peak"]
         current = torch.cuda.memory_stats()["allocated_bytes.all.current"]
+        # memory held by OTHER processes on this GPU: mem_get_info is
+        # device-wide, so a shared card would otherwise make the budget
+        # negative. On an exclusive card this term is 0 and the formula
+        # reduces to nano-vllm's original.
+        used_by_others = (total - free) - current
         num_kv_heads = hf_config.num_key_value_heads
         head_dim = getattr(hf_config, "head_dim", hf_config.hidden_size // hf_config.num_attention_heads)
         # per slot (= one token): H heads x (k_q D/8 u32 + k_s f16
         #                            + v_q D/8 u32 + v_s f16) = 2*D bytes
         slot_bytes = 2 * head_dim
         block_bytes = hf_config.num_hidden_layers * self.block_size * num_kv_heads * slot_bytes
-        config.num_kvcache_blocks = int(total * config.gpu_memory_utilization - used - peak + current) // block_bytes
+        budget = int(total * config.gpu_memory_utilization) - used_by_others - peak
+        print(f"[kvalloc] total={total/2**30:.2f}GiB util={config.gpu_memory_utilization} "
+              f"used_by_others={used_by_others/2**30:.2f} peak={peak/2**30:.2f} "
+              f"current={current/2**30:.2f} budget={budget/2**30:.2f}GiB "
+              f"block_bytes={block_bytes/1024:.1f}KiB")
+        config.num_kvcache_blocks = budget // block_bytes
         assert config.num_kvcache_blocks > 0
         nl, nb = hf_config.num_hidden_layers, config.num_kvcache_blocks
         total_slots = nb * self.block_size                     # one slot per token
+        nw = head_dim // 8
+        vg = config.v_group
+        ng = head_dim // vg
         self.kv_cache = []
         for _ in range(nl):
-            kq = torch.zeros(total_slots, num_kv_heads, head_dim // 8,
+            # K: int4 + a STATIC per-channel scale table shared by all slots
+            kq = torch.zeros(total_slots, num_kv_heads, nw,
                              dtype=torch.uint32, device="cuda")
-            ks = torch.zeros(total_slots, num_kv_heads,
+            ks = torch.zeros(num_kv_heads, head_dim,
                              dtype=torch.float16, device="cuda")
-            vq = torch.zeros(total_slots, num_kv_heads, head_dim // 8,
+            # V: int4 + a dynamic per-token, per-group scale
+            vq = torch.zeros(total_slots, num_kv_heads, nw,
                              dtype=torch.uint32, device="cuda")
-            vs = torch.zeros(total_slots, num_kv_heads,
+            vs = torch.zeros(total_slots, num_kv_heads, ng,
                              dtype=torch.float16, device="cuda")
             self.kv_cache.append(((kq, ks), (vq, vs)))
         layer_id = 0
@@ -125,7 +139,32 @@ class ModelRunner:
             if hasattr(module, "k_cache") and hasattr(module, "v_cache"):
                 module.k_cache = self.kv_cache[layer_id][0]
                 module.v_cache = self.kv_cache[layer_id][1]
+                if getattr(module, "v_group", None) is None:
+                    module.v_group = vg
                 layer_id += 1
+        self.load_smoothing(config.smooth_kv)
+
+    def load_smoothing(self, path: str | None):
+        """Fold the calibrated SmoothAttention factors into the pool.
+
+        lambda acts as a per-KV-head elementwise weight, so it is not a
+        parameter that can be merged into either norm (those are per-channel,
+        shared across heads) — it is applied in the attention layer instead.
+        kscale becomes the static per-channel scale table.
+        """
+        if not path:
+            return
+        ck = torch.load(path, map_location="cuda", weights_only=False)
+        lam, kscale = ck["lambda"].float(), ck["kscale"].float()
+        assert lam.shape[0] == self.config.hf_config.num_hidden_layers, \
+            "layer count mismatch"
+        layer_id = 0
+        for module in self.model.modules():
+            if hasattr(module, "k_cache") and hasattr(module, "v_cache"):
+                module.set_smooth_lambda(lam[layer_id].cuda())
+                module.k_cache[1].copy_(kscale[layer_id].half())
+                layer_id += 1
+        print(f"[smooth_kv] loaded {path}: lambda/kscale for {layer_id} layers")
 
     def prepare_block_tables(self, seqs: list[Sequence]):
         max_len = max(len(seq.block_table) for seq in seqs)
