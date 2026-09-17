@@ -130,3 +130,16 @@ class VocabEmbedding(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return F.embedding(x, self.weight)
+
+
+class LMHead(VocabEmbedding):
+    """Output projection. Weight layout is HF's: [vocab, hidden].
+
+    Not a `Linear`: `Linear` is declared [out, in], and the HF checkpoint
+    stores this matrix as [vocab, hidden], so declaring it as Linear(vocab,
+    hidden) inverts the axes and only loads by accident when the model ties
+    word embeddings (Qwen3-1.7B does, Qwen3-8B does not).
+    """
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return F.linear(x, self.weight)

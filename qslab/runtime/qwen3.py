@@ -5,15 +5,26 @@
   (so nano-vllm's loader fills them), and are W4-swappable after load.
 - Attention is qslab's quantized paged attention: per-token int4 KV storage
   (slot-mapped), flash-attn varlen prefill, Triton decode kernel.
+
+**Projections are deliberately NOT fused** (no qkv_proj / gate_up_proj):
+
+  * the packed W4 checkpoints are keyed by HF module name (q_proj, k_proj,
+    v_proj, gate_proj, up_proj) with the AWQ input scale stored per logical
+    module — a fused qkv would discard them, or force per-shard scale factors
+    to be stored on one tensor.
+  * keeping them separate ends the "v is a strided view of a fused buffer"
+    hazard that caused the M8 store bug.
+  * the cost was measured at ~3% decode throughput (149.1 -> 144.8 tok/s),
+    which does not justify the fused layout.
 """
 from __future__ import annotations
 
 import torch
+import torch.nn.functional as F
 from torch import nn
 from transformers import Qwen3Config
 
-from qslab.runtime.primitives import (
-    Linear, MergedLinear, QKVLinear, RMSNorm, SiluAndMul, VocabEmbedding)
+from qslab.runtime.primitives import Linear, LMHead, RMSNorm, VocabEmbedding
 from qslab.runtime.attention import PagedAttention
 from qslab.runtime.rotary import get_rope
 
@@ -33,10 +44,11 @@ class Qwen3Attention(nn.Module):
         self.kv_size = self.num_kv_heads * self.head_dim
         self.scaling = self.head_dim ** -0.5
 
-        self.qkv_proj = QKVLinear(hidden_size, self.total_num_heads,
-                                  self.total_num_kv_heads, self.head_dim,
-                                  bias=qkv_bias)
-        self.o_proj = Linear(self.total_num_heads * self.head_dim, hidden_size)
+        # separate projections: see the module docstring
+        self.q_proj = Linear(hidden_size, self.q_size, bias=qkv_bias)
+        self.k_proj = Linear(hidden_size, self.kv_size, bias=qkv_bias)
+        self.v_proj = Linear(hidden_size, self.kv_size, bias=qkv_bias)
+        self.o_proj = Linear(self.q_size, hidden_size)
         self.rotary_emb = get_rope(self.head_dim, self.head_dim, max_position,
                                    rope_theta)
         self.attn = PagedAttention(self.num_heads, self.head_dim, self.scaling,
@@ -45,11 +57,9 @@ class Qwen3Attention(nn.Module):
         self.k_norm = RMSNorm(self.head_dim, eps=rms_norm_eps)
 
     def forward(self, positions: torch.Tensor, hidden_states: torch.Tensor):
-        qkv = self.qkv_proj(hidden_states)
-        q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
-        q = q.view(-1, self.num_heads, self.head_dim)
-        k = k.view(-1, self.num_kv_heads, self.head_dim)
-        v = v.view(-1, self.num_kv_heads, self.head_dim)
+        q = self.q_proj(hidden_states).view(-1, self.num_heads, self.head_dim)
+        k = self.k_proj(hidden_states).view(-1, self.num_kv_heads, self.head_dim)
+        v = self.v_proj(hidden_states).view(-1, self.num_kv_heads, self.head_dim)
         q = self.q_norm(q)
         k = self.k_norm(k)
         q, k = self.rotary_emb(positions, q, k)
@@ -60,15 +70,12 @@ class Qwen3Attention(nn.Module):
 class Qwen3MLP(nn.Module):
     def __init__(self, hidden_size: int, intermediate_size: int):
         super().__init__()
-        self.gate_up_proj = MergedLinear(hidden_size,
-                                         [intermediate_size, intermediate_size])
+        self.gate_proj = Linear(hidden_size, intermediate_size)
+        self.up_proj = Linear(hidden_size, intermediate_size)
         self.down_proj = Linear(intermediate_size, hidden_size)
-        self.act_fn = SiluAndMul()
 
     def forward(self, x):
-        gate_up = self.gate_up_proj(x)
-        x = self.act_fn(gate_up)
-        return self.down_proj(x)
+        return self.down_proj(F.silu(self.gate_proj(x)) * self.up_proj(x))
 
 
 class Qwen3DecoderLayer(nn.Module):
@@ -119,18 +126,13 @@ class Qwen3Model(nn.Module):
 
 
 class Qwen3ForCausalLM(nn.Module):
-    packed_modules_mapping = {
-        "q_proj": ("qkv_proj", 0),
-        "k_proj": ("qkv_proj", 1),
-        "v_proj": ("qkv_proj", 2),
-        "gate_proj": ("gate_up_proj", 0),
-        "up_proj": ("gate_up_proj", 1),
-    }
+    # projections are stored separately, so no shard mapping is needed
+    packed_modules_mapping: dict = {}
 
     def __init__(self, config: Qwen3Config):
         super().__init__()
         self.model = Qwen3Model(config)
-        self.lm_head = Linear(config.vocab_size, config.hidden_size)
+        self.lm_head = LMHead(config.vocab_size, config.hidden_size)
         if config.tie_word_embeddings:
             self.lm_head.weight = self.model.embed_tokens.weight
 

@@ -18,6 +18,8 @@ class Config:
     num_kvcache_blocks: int = -1
     v_group: int = 64              # V quant group size along head_dim
     smooth_kv: str | None = None   # SmoothAttention calibration file
+    w4: str | None = None          # qslab_w4_v1 dir; swaps in packed weights
+    w4_backend: str = "w4.auto"    # w4.v1 / w4.marlin / w4.auto
 
     def __post_init__(self):
         assert os.path.isdir(self.model)

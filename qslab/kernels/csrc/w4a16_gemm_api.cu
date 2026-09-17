@@ -1,5 +1,6 @@
 // w4a16_gemm_api.cu — torch extension API around the raw kernel.
 #include <torch/extension.h>
+#include <c10/cuda/CUDAStream.h>
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
 #include <cstdint>
@@ -67,7 +68,12 @@ torch::Tensor w4a16_gemm(torch::Tensor qfp, torch::Tensor scale,
     auto x2 = x.dim() == 2 ? x : x.unsqueeze(0);
     auto y = torch::empty({M, N}, x.options());          // fp16 out: no cast op
     dim3 grid((N + 3) / 4, M);
-    w4a16_gemm_kernel<<<grid, 128>>>(
+    // Launch on the CURRENT stream, not the legacy default one: a CUDA
+    // Graph capture happens on a side stream, and kernels put on the default
+    // stream are not recorded into the graph — the replayed graph then skips
+    // this GEMV entirely and produces zeros.
+    auto stream = c10::cuda::getCurrentCUDAStream();
+    w4a16_gemm_kernel<<<grid, 128, 0, stream.stream()>>>(
         reinterpret_cast<const uint32_t*>(qfp.data_ptr<uint32_t>()),
         reinterpret_cast<const __half*>(scale.data_ptr<at::Half>()),
         reinterpret_cast<const __half*>(x2.data_ptr<at::Half>()),

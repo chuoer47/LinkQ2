@@ -9,7 +9,7 @@ from qslab.runtime.sequence import Sequence
 from qslab.runtime.qwen3 import Qwen3ForCausalLM
 from qslab.runtime.sampler import Sampler
 from qslab.runtime.context import set_context, get_context, reset_context
-from qslab.runtime.loader import load_model
+from qslab.runtime.loader import load_model, swap_w4
 
 
 class ModelRunner:
@@ -29,6 +29,11 @@ class ModelRunner:
         torch.set_default_device("cuda")
         self.model = Qwen3ForCausalLM(hf_config)
         load_model(self.model, config.model)
+        if config.w4:
+            n = swap_w4(self.model, config.w4, backend=config.w4_backend)
+            assert n > 0, f"no packed weights found under {config.w4}"
+            print(f"[w4] swapped {n} linears from {config.w4} "
+                  f"(backend={config.w4_backend})")
         self.sampler = Sampler()
         self.warmup_model()
         self.allocate_kv_cache()
