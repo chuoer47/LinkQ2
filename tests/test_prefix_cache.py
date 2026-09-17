@@ -61,26 +61,26 @@ def test_identical_prompt_is_deterministic():
         _release(eng)
 
 
-def test_prefix_reuse_preserves_context():
-    """A cache hit must not change the continuation.
+def test_repeat_request_matches_a_fresh_engine():
+    """A repeat request must land on the same answer as a clean run.
 
-    The second call reuses a cached prefix; its first generated token must
-    still match what a from-scratch run produces, because the model output
-    depends only on the prompt.
+    Only one engine fits on the card at a time, so the baseline is taken
+    first and its engine released before the repeat is run.
     """
+    sp = SamplingParams(temperature=1e-6, max_tokens=8)
+    prompt = LONG + " Different suffix one."
+
+    fresh = _engine()
+    try:
+        baseline = fresh.generate([prompt], sp, use_tqdm=False)[0]["token_ids"]
+    finally:
+        _release(fresh)
+
     eng = _engine()
     try:
-        sp = SamplingParams(temperature=1e-6, max_tokens=8)
-        eng.generate([LONG + " Different suffix one."], sp, use_tqdm=False)
-        reused = eng.generate([LONG + " Different suffix one."], sp,
-                              use_tqdm=False)[0]["token_ids"]
-        fresh = _engine()
-        try:
-            baseline = fresh.generate([LONG + " Different suffix one."], sp,
-                                      use_tqdm=False)[0]["token_ids"]
-        finally:
-            _release(fresh)
-        assert reused == baseline, (
-            f"cache-reuse changed the answer: {reused[:8]} vs {baseline[:8]}")
+        eng.generate([prompt], sp, use_tqdm=False)          # populates blocks
+        repeat = eng.generate([prompt], sp, use_tqdm=False)[0]["token_ids"]
+        assert repeat == baseline, (
+            f"repeat diverged from a fresh run: {repeat[:8]} vs {baseline[:8]}")
     finally:
         _release(eng)

@@ -55,7 +55,19 @@ class BlockManager:
         self.used_block_ids.remove(block_id)
         self.free_block_ids.append(block_id)
 
+    #: Prefix reuse is off. A hit hands `prepare_prefill` a shorter chunk plus
+    #: a block_table, expecting attention to read the reused prefix out of the
+    #: KV cache. Our prefill runs flash-attn on the freshly computed fp16 K/V
+    #: and never reads the pool, so a hit would silently drop the prefix and
+    #: the sequence would answer as if its context were the suffix alone.
+    #: Re-enabling means teaching prefill to materialize the cached int4 prefix
+    #: (or running attention against the pool for the cached part).
+    ENABLE_PREFIX_CACHE = False
+
     def can_allocate(self, seq: Sequence) -> int:
+        if not self.ENABLE_PREFIX_CACHE:
+            # still refuse when the pool cannot take the whole sequence
+            return 0 if len(self.free_block_ids) >= seq.num_blocks else -1
         h = -1
         num_cached_blocks = 0
         num_new_blocks = seq.num_blocks
