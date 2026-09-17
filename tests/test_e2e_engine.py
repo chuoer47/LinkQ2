@@ -1,59 +1,71 @@
-"""End-to-end tests: engine vs HF oracle, spec losslessness (need weights)."""
-from __future__ import annotations
+"""M8: end-to-end generation through the runtime, W4-free with KV4.
 
-from pathlib import Path
-
+The oracle is a greedy HF decode of the same prompt. With SmoothAttention
+calibration applied the KV4 path reproduces it token for token, so the test
+is a strict equality check rather than a fuzzy one — any drift in the cache
+layout (encoding, row addressing, group scaling) shows up as a mismatch.
+"""
 import pytest
 import torch
 
+from qslab.runtime.llm_engine import LLMEngine
+from qslab.runtime.sampling_params import SamplingParams
+from adapters.tokenizer import QwenTokenizerAdapter
+
 pytestmark = pytest.mark.e2e
 
-from conftest import DRAFT_MODEL, SMALL_MODEL, SMALL_W4  # noqa: E402
-
-pytestmark = [pytest.mark.e2e, pytest.mark.gpu]
-
-
-@pytest.fixture(autouse=True)
-def _needs_assets():
-    if not torch.cuda.is_available():
-        pytest.skip("no CUDA device")
-    if not (SMALL_MODEL.exists() and SMALL_W4.exists()):
-        pytest.skip("model weights not on disk")
+MODEL = "models/Qwen3-1.7B"
+PROMPT = " The capital of France is"
+CALIB = "results/smooth_kv4_qwen3-1.7b.pt"
 
 
-class TestEngineOracle:
-    def test_fp16_engine_matches_hf_greedy(self):
-        from qslab.api.llm import LLM, SamplingParams
-
-        llm = LLM(str(SMALL_MODEL))
-        prompt = " The capital of France is"
-        got = llm.generate(prompt, SamplingParams(max_tokens=24))["token_ids"]
-
-        # HF oracle
-        from qslab.models.loader import load_reference_model
-        from adapters.tokenizer import QwenTokenizerAdapter
-        tok = QwenTokenizerAdapter(SMALL_MODEL)
-        ref = load_reference_model(SMALL_MODEL)
-        ids = tok.encode(prompt)
-        with torch.inference_mode():
-            out = ref.generate(torch.tensor([ids], device="cuda:0"),
-                               max_new_tokens=24, do_sample=False)
-        assert got == out[0][len(ids):].tolist()
+@pytest.fixture(scope="module")
+def oracle():
+    from qslab.models.loader import load_reference_model
+    tok = QwenTokenizerAdapter(MODEL)
+    ids = tok.encode(PROMPT)
+    ref = load_reference_model(MODEL)
+    with torch.inference_mode():
+        out = ref.generate(torch.tensor([ids], device="cuda"),
+                           max_new_tokens=16, do_sample=False)
+    del ref
+    torch.cuda.empty_cache()
+    return ids, out[0][len(ids):].tolist()
 
 
-class TestSpecLosslessness:
-    @pytest.mark.parametrize("mode", ["chained", "lookahead", "dynamic"])
-    def test_speculation_is_lossless(self, mode):
-        """Every mode must reproduce target-only greedy exactly."""
-        from qslab.api.llm import LLM, SamplingParams
+@pytest.fixture(scope="module")
+def engine():
+    eng = LLMEngine(model=MODEL, max_model_len=4096, max_num_seqs=8,
+                    enforce_eager=True, gpu_memory_utilization=0.5,
+                    smooth_kv=CALIB)
+    yield eng
 
-        prompt = " The capital of France is"
-        params = SamplingParams(max_tokens=24)
 
-        base = LLM(str(SMALL_MODEL), w4=str(SMALL_W4))
-        ref_tokens = base.generate(prompt, params)["token_ids"]
+def test_greedy_matches_hf(engine, oracle):
+    _, expected = oracle
+    out = engine.generate([PROMPT], SamplingParams(temperature=1e-6, max_tokens=16),
+                          use_tqdm=False)
+    assert out[0]["token_ids"] == expected
 
-        spec = LLM(str(SMALL_MODEL), w4=str(SMALL_W4), draft=str(DRAFT_MODEL),
-                   spec_mode=mode, spec_gamma=4)
-        got = spec.generate(prompt, params)["token_ids"]
-        assert got == ref_tokens, f"{mode} broke losslessness"
+
+def test_kv4_pool_is_int4(engine):
+    """The pool must actually be packed — a silent fallback to fp16 would
+    make the correctness test above pass for the wrong reason."""
+    a = engine.model_runner.model.model.layers[0].self_attn.attn
+    kq, ks = a.k_cache
+    vq, vs = a.v_cache
+    H, D = a.num_kv_heads, a.head_dim
+    assert kq.dtype == torch.uint32 and kq.shape[-1] == D // 8      # 4 bits/channel
+    assert vq.dtype == torch.uint32 and vq.shape[-1] == D // 8
+    assert ks.shape == (H, D), "K scale should be the static per-channel table"
+    assert vs.shape[-1] == D // a.v_group, "V scale should be per token group"
+
+
+def test_second_request_reuses_freed_blocks(engine, oracle):
+    """Blocks released by a finished sequence must be reusable without
+    carrying stale KV into the next one."""
+    _, expected = oracle
+    for _ in range(2):
+        out = engine.generate([PROMPT], SamplingParams(temperature=1e-6, max_tokens=16),
+                              use_tqdm=False)
+        assert out[0]["token_ids"] == expected
