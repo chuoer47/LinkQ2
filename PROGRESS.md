@@ -54,3 +54,41 @@
 
 R0-R6 全部完成。仓库从"按里程碑堆叠的研究代码"变为五层分层、策略化、有测试有文档的工程仓库。
 7 个阶段 commit + 修复 2 个重构引入的真 bug（空提案 KV 错位、_wrap_input_scale 静默 no-op）。
+
+---
+
+## M7 量化 paged attention（2026-09-16 完成）
+
+- [x] M7-s1 L0：`KV4PagedCache`（BLOCK_N=128 块对齐，GROUP=64 不跨块）+ Triton kernel
+      （tile 内反量化，不 materialize dense fp16）；vs dense 参考 max diff 0.0
+      修 3 bug：uint32 下溢（先转 int32）/ 转置 / fp16 scale 下溢（下界 1e-4）
+- [x] M7-s2 接入引擎：`kv_mode="kv4.paged"` 策略注册 + attention decode 分支（GQA 映射）
+      paged vs dense 端到端输出完全一致
+      修 4 bug：**组内 scale 污染**（追加时要重算整组）/ GQA 头映射 / uint32 下溢 / 转置
+- [x] M7-s3 8B 验收：paged PPL **18.50** vs dense 18.70（差 -0.20，噪声级）
+      **@8K 峰值显存 24.4 → 18.4 GB**（O(context) 的 fp16 副本消失）
+- [x] M7-s4 notes/M7-量化paged-attention.md
+
+## M8 nano-vllm runtime 整合（进行中）
+
+- [x] M8-s1 vendor：nano-vllm runtime（MIT）进 `qslab/runtime/`——调度/分页/块管理/
+      CUDA Graph 骨架保留；TP 多进程剥离；模型定义换成我们的 primitives
+- [x] M8-s2 引擎端到端打通。**两个真 bug**：
+      1. **nibble 编码不对称**——store 写 offset-binary(`qi+8`)，decode 读
+         two's-complement(`nib-16`)，所有值整体偏 8 个量化级
+      2. **V 非连续视图**——`v` 来自 `qkv.split()`（行 stride 4096 ≠ H*D 1024），
+         store kernel 按连续布局读 → 池里 V 全错；flash-attn 自己处理 stride，
+         所以 prefill 无恙、只有 decode 崩
+      另修：KV 显存预算用全卡口径（共享卡上算出负数）→ 扣除他进程占用
+- [x] M8-s2 K/V 量化方案定版（原 per-token 方案被实测推翻，见 docs/design-m8.md 追加）：
+      **K = int4 + 静态 per-channel scale（SmoothAttention 离线校准）**、
+      **V = int4 + 动态 per-token group=64**。
+      依据：vLLM/TRT-LLM 离线校准存 checkpoint；KIVI K per-channel / V per-token；
+      QServe SmoothAttention `λ_i=max|K_i|^0.5`（且 λ_d=λ_{d+D/2} 以与 RoPE 交换）
+- [x] 验收：**1.7B e2e 与 HF oracle 逐 token 一致**；KV 池 6.92 GiB（fp16 需 13.84，**2×**）；
+      全套 20 测试通过
+- [ ] M8-s3 CUDA Graph 实测（`enforce_eager=False`）/ 连续批吞吐 / 8B 验收
+- [ ] M8-s4 W4 权重接入 runtime 加载路径（现只读 HF safetensors）；前缀缓存验证
+
+### 行为无回归基线（每阶段复测）
+8B W4 e2e 39.8 tok/s | PPL 17.31 | KV4 省 3.5× | lookahead 1.44× | oracle 对齐 PASS
