@@ -84,6 +84,8 @@ def test_8b_w4_kv4_graph_is_coherent(oracle):
         assert got[0] == oracle[0], "first token (pure prefill) must match"
         assert len(set(got)) > len(got) // 3, f"degenerate repetition: {got}"
         assert 0 not in got, f"zero tokens indicate a broken kernel: {got}"
+        # prefill is the exact boundary; decode drifts with 4-bit rounding
+        assert "Paris" in out[0]["text"]
     finally:
         _release(eng)
 
