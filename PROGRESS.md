@@ -95,8 +95,21 @@ R0-R6 全部完成。仓库从"按里程碑堆叠的研究代码"变为五层分
       flash-attn varlen 打包 **Δ=0**；我们 batched logits vs HF batched **top-1 8/8**；
       输出不依赖同伴内容；内核重放 **Δ=0**；**HF 自己 solo vs batched 同样漂移
       0.021~0.033**。根因是批大小改变 GEMM 的 M 维 → cuBLAS 换 tiling → 归约顺序变
-- [ ] 8B 验收
-- [ ] M8-s4 W4 权重接入 runtime 加载路径（现只读 HF safetensors）；前缀缓存验证
+- [x] M8-s4 **W4 权重接入 runtime**：`swap_w4()` 把 fp16 Linear 换成 L1 打包 W4Linear；
+      运行时模型改为**独立 q/k/v 与 gate/up 投影**（不融合）——打包 checkpoint 按
+      HF 模块名存权重、AWQ 输入缩放按逻辑模块存，融合会丢掉 per-shard scale；
+      实测融合只值 3%（149.1→144.8 tok/s）。独立投影还从根上消除了 V 非连续的隐患
+- [x] M8-s4 修两个真 bug：
+      ① **lm_head 维度声明反了**（HF 存 [vocab,hidden]，而 Linear 是 [out,in]）；
+         1.7B 因 tie_word_embeddings 侥幸通过，8B 加载即报 shape mismatch
+      ② **w4a16_gemm 启动在默认流**（无 stream 参数），CUDA Graph 捕获在旁路流——
+         该 GEMV 没被录进图、回放时跳过、输出全 0。改用 getCurrentCUDAStream()
+- [x] M8-s4 8B 验收（部分）：prefill logits vs HF **max|Δ|=0.018**（top-5 相同）；
+      decode **55.8 tok/s**（graph）；输出连贯（"Paris. The capital of Germany is Berlin."）
+- [ ] **遗留：8B 的 KV4 静态 K scale 覆盖不足**——运行时 K 有 18~66 个通道超出
+      校准上限（1.7B 仅 1 个），KV 相对误差 ~0.15（1.7B ~0.12），greedy 在第 5 个
+      token 附近翻转。8B 测试据此断言连贯性而非逐 token 相等
+- [ ] 前缀缓存验证
 
 ### 行为无回归基线（每阶段复测）
 8B W4 e2e 39.8 tok/s | PPL 17.31 | KV4 省 3.5× | lookahead 1.44× | oracle 对齐 PASS
