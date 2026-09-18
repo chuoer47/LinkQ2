@@ -39,7 +39,8 @@ class LLMEngine:
                 config.draft_model, config.spec_num_drafts,
                 config.max_model_len, config.max_num_seqs,
                 gpu_memory_utilization=config.draft_gpu_memory_utilization,
-                smooth_kv=calib)
+                smooth_kv=calib, w4=config.draft_w4,
+                w4_backend=config.draft_w4_backend)
         atexit.register(self.exit)
 
     def exit(self):

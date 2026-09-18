@@ -28,6 +28,8 @@ class Config:
     spec_ngram_size: int = 3              # lookup window n
     draft_model: str | None = None        # spec_method="draft": small model
     draft_gpu_memory_utilization: float = 0.95   # draft pool sizing
+    draft_w4: str | None = None          # packed W4 dir for the draft model
+    draft_w4_backend: str = "w4.v1"     # v1 GEMV is built for M=1 decode
 
     def __post_init__(self):
         assert os.path.isdir(self.model)
