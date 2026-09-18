@@ -82,8 +82,8 @@
 ### A 档：可删（无引用、实验证伪产物）
 | 项 | 依据 |
 |---|---|
-| `models/Qwen3-0.6B-qslab-w4-awq2`（227M） | W4 draft 证伪实验的产物（TODO #10）；证伪结论在 results/m9_gamma_sweep_draft.txt，模型本身无保留价值 |
-| `tests/` 下 4 个非 pytest 辅助脚本（spec_lossless / oracle_alignment / kernel_path_oracle / kv_ppl_compare） | M1/M3/M8 时代的一次性验证脚本，pytest 不执行，全走旧引擎；移 `scripts/archive/` 即可 |
+| ~~models/Qwen3-0.6B-qslab-w4-awq2~~ | ✅ A档已删（11795fd）：W4 draft 证伪产物，结论在 results/m9_gamma_sweep_draft.txt |
+| ~~tests/ 下 4 个非 pytest 辅助脚本~~ | ✅ A档已移 scripts/archive/m-verification/（11795fd） |
 
 ### B 档：冻结保留（叙述/教学价值 > 删除收益）
 | 项 | 为什么留 |

@@ -19,4 +19,4 @@
 7. 旧投机栈 qslab/engine/spec/（lookahead/dynamic）冻结未迁移。
 8. 8B+draft e2e 测试未固化（有 bench 数据无测试）。
 9. 128K YaRN demo 未跑（M4 起遗留）。
-10. models/Qwen3-0.6B-qslab-w4-awq2（W4 draft 证伪实验产物）可删或注记。
+10. ~~models/Qwen3-0.6B-qslab-w4-awq2~~ 已删（A 档清理 11795fd）；tests/ 4 个辅助脚本已移 scripts/archive/m-verification/。
