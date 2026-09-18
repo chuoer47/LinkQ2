@@ -6,6 +6,12 @@
 ngram (gamma=4) for comparison:
 1.7B: copy 455.9 (3.13x) natural 212.3 (1.46x)
 8B:   copy 310.4 (3.19x) natural  93.2 (0.95x)
-bottleneck (measured): draft step = 4.3ms (~2ms GPU forward 0.6B fp16 + lm_head,
-~2ms python/launch/sync per step); gamma=4 -> ~17ms proposal phase per verify step.
-Follow-ups: W4-quantize the draft (halves GPU traffic), fused argmax, lm_head in graph.
+bottleneck (CUDA-event measured, precise): draft step = 4.53ms, 100% GPU-bound
+(CPU prep+submit 0.25ms fully overlapped). Breakdown:
+  - 28x7 weight GEMVs (840MB):  2.50ms  @ 352GB/s  (35% of 4090 peak; M=1 small
+    GEMVs are latency-bound: single gate_proj measures 471GB/s)
+  - ~280 small kernels (attn/norm/rope/kv-store): 1.70ms (launch-gap bound at bs=1)
+  - lm_head (311MB): 0.32ms @ 963GB/s (near peak -> shape, not hardware)
+  - argmax: 0.01ms
+gamma=4 -> 18ms proposal phase per verify step.
+Levers ranked: W4-quantize draft body (840->210MB), fuse small kernels.
