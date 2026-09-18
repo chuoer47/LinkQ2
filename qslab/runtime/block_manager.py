@@ -55,14 +55,14 @@ class BlockManager:
         self.used_block_ids.remove(block_id)
         self.free_block_ids.append(block_id)
 
-    #: Prefix reuse is off. A hit hands `prepare_prefill` a shorter chunk plus
-    #: a block_table, expecting attention to read the reused prefix out of the
-    #: KV cache. Our prefill runs flash-attn on the freshly computed fp16 K/V
-    #: and never reads the pool, so a hit would silently drop the prefix and
-    #: the sequence would answer as if its context were the suffix alone.
-    #: Re-enabling means teaching prefill to materialize the cached int4 prefix
-    #: (or running attention against the pool for the cached part).
-    ENABLE_PREFIX_CACHE = False
+    #: Prefix reuse is ON. A hit hands `prepare_prefill` a shorter chunk plus
+    #: a block_table; PagedAttention._materialize_prefix dequantizes the
+    #: cached int4 prefix back to fp16 and feeds flash-attn the full-length
+    #: K/V, repairing the M8 silent-wrong-answer bug (cu_seqlens_k claimed a
+    #: length only the pool held, so flash-attn consumed misaligned suffix
+    #: rows). A hit now differs from a cold run only by the int4 quantization
+    #: error — the already accepted KV4 noise (notes/M9).
+    ENABLE_PREFIX_CACHE = True
 
     def can_allocate(self, seq: Sequence) -> int:
         if not self.ENABLE_PREFIX_CACHE:

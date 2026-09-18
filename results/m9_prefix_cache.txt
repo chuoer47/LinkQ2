@@ -1,0 +1,3 @@
+=== prefix cache TTFT: models/Qwen3-1.7B ctx=3800+11 ===
+cold turn-1:   136.2 ms
+hit  turn-2:    49.9 ms   (2.73x faster TTFT)

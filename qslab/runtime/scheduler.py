@@ -137,6 +137,12 @@ class Scheduler:
             for t in appended:
                 seq.append_token(t)
             committed += len(appended)
+            # hash blocks that filled up during this commit, so speculative
+            # sequences contribute prefix-cache entries like plain ones
+            # (hash_blocks slices token_ids per FULL block; multi-token
+            # commits can complete several)
+            seq.num_scheduled_tokens = len(appended)
+            self.block_manager.hash_blocks(seq)
             # the pool now holds KV for positions 0..num_tokens-2 (the last
             # committed token is the freshly sampled bonus; its KV is stored
             # by the next step, like every decode step's input token)

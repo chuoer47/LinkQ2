@@ -218,14 +218,34 @@ class ModelRunner:
                 else:
                     slot_end = seq.block_table[i] * self.block_size + end - i * self.block_size
                 slot_mapping.extend(range(slot_start, slot_end))
-        if cu_seqlens_k[-1] > cu_seqlens_q[-1]:    # prefix cache
+        prefix_slots = None
+        prefix_plan = None
+        if cu_seqlens_k[-1] > cu_seqlens_q[-1]:    # prefix cache / chunked
             block_tables = self.prepare_block_tables(seqs)
+            # one slot plan for all 28 layers (see Context.prefix_slots)
+            slots = []
+            prefix_plan = []
+            q_off = 0
+            for seq in seqs:
+                cached = seq.num_cached_tokens
+                sched = seq.num_scheduled_tokens
+                if sched == 0:
+                    continue
+                prefix_plan.append((len(slots), cached, q_off, q_off + sched))
+                for j in range(cached):
+                    slots.append(seq.block_table[j // self.block_size] * self.block_size
+                                 + j % self.block_size)
+                q_off += sched
+            prefix_slots = torch.tensor(slots, dtype=torch.int64,
+                                        pin_memory=True).cuda(non_blocking=True)
         input_ids = torch.tensor(input_ids, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
         positions = torch.tensor(positions, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
         cu_seqlens_q = torch.tensor(cu_seqlens_q, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
         cu_seqlens_k = torch.tensor(cu_seqlens_k, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
         slot_mapping = torch.tensor(slot_mapping, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
-        set_context(True, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k, slot_mapping, None, block_tables)
+        set_context(True, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k,
+                    slot_mapping, None, block_tables,
+                    prefix_slots=prefix_slots, prefix_plan=prefix_plan or None)
         return input_ids, positions
 
     def prepare_decode(self, seqs: list[Sequence]):

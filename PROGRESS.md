@@ -164,3 +164,13 @@ R0-R6 全部完成。仓库从"按里程碑堆叠的研究代码"变为五层分
 - [x] γ 帕累托：自然 **γ=2 1.17×** / 复读 **γ=8 2.30×**；n-gram 统治复读、
       draft 统治自然文本——两种 proposer 各有主场
 - 11 spec 测试全绿
+
+### M9 续3：前缀缓存修复复活（2026-09-18 完成）
+
+- [x] M8 静默错答 bug 修复：materialize_kv 反量化 + prepare_prefill 一次
+      slot 计划下发全层（第一版每层 tolist 同步 ~14ms，教训：跨层计划不进层内）
+      + attention prefill 物化拼接；`ENABLE_PREFIX_CACHE=True` 默认开
+- [x] 同族修复：chunked prefill 第二块的同款错位（一次修复两个 bug）
+- [x] spec 提交补 hash_blocks（投机序列也能贡献缓存条目）
+- [x] 验收：8B 3800-token 前缀 **TTFT 558.3→63.0ms（8.86×）**；1.7B 2.73×；
+      171-token 复现实验输出正确（错误前导 0 消失）；全量回归绿

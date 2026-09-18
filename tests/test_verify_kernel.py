@@ -26,7 +26,9 @@ def _make_pool(n_slots, hkv, d, seed=0):
     g = torch.Generator(device="cuda").manual_seed(seed)
     k = (torch.randn(n_slots, hkv, d, generator=g, device="cuda") * 0.5).half()
     v = (torch.randn(n_slots, hkv, d, generator=g, device="cuda") * 0.5).half()
-    ks = (torch.rand(hkv, d, generator=g, device="cuda") * 0.3 + 0.05).half()
+    # calibration-like per-channel scale (amax/7): no channel saturates the
+    # int4 range, so the roundtrip error is bounded by half a quant step
+    ks = (k.float().abs().amax(dim=0) / 7).clamp_min(1e-4).half()
     kq = torch.zeros(n_slots, hkv, d // 8, dtype=torch.uint32, device="cuda")
     vq = torch.zeros(n_slots, hkv, d // 8, dtype=torch.uint32, device="cuda")
     vs = torch.zeros(n_slots, hkv, d // V_GROUP, dtype=torch.float16, device="cuda")
@@ -190,3 +192,27 @@ def test_neg1_padding_degrades_to_prefix():
         ref[0, m] = o.half()
     gap = (out - ref.float()).abs()
     assert gap.max().item() < 2e-3, f"max|Δ| = {gap.max().item():.5f}"
+
+
+def test_materialize_kv_roundtrip():
+    """store -> materialize must return the original values within the int4
+    quantization step (the prefix-cache hit path depends on it)."""
+    hkv, d, n = 2, 64, 96
+    g = torch.Generator(device="cuda").manual_seed(11)
+    k = (torch.randn(n, hkv, d, generator=g, device="cuda") * 0.5).half()
+    v = (torch.randn(n, hkv, d, generator=g, device="cuda") * 0.5).half()
+    # calibration-like per-channel scale (amax/7): no channel saturates the
+    # int4 range, so the roundtrip error is bounded by half a quant step
+    ks = (k.float().abs().amax(dim=0) / 7).clamp_min(1e-4).half()
+    kq = torch.zeros(n, hkv, d // 8, dtype=torch.uint32, device="cuda")
+    vq = torch.zeros(n, hkv, d // 8, dtype=torch.uint32, device="cuda")
+    vs = torch.zeros(n, hkv, d // V_GROUP, dtype=torch.float16, device="cuda")
+    slots = torch.arange(n, dtype=torch.int64, device="cuda")
+    store_kv_quant(k, v, (kq, ks), (vq, vs), slots, v_group=V_GROUP)
+    from qslab.runtime.paged_decode import materialize_kv
+    km, vm = materialize_kv((kq, ks), (vq, vs), slots, v_group=V_GROUP)
+    # error bounded by the quantization step: half a step for round-to-nearest
+    k_step = ks.float().repeat(n, 1, 1)
+    assert (km.float() - k.float()).abs().max() <= 0.51 * k_step.max()
+    assert (vm.float() - v.float()).abs().max() <= 0.51 * (v.float().abs() / 7).max() * 1.01
+    assert (km - k).abs().float().mean() < 0.05

@@ -23,7 +23,8 @@ from torch import nn
 from flash_attn import flash_attn_varlen_func
 
 from qslab.runtime.context import get_context
-from qslab.runtime.paged_decode import store_kv_quant, paged_attention_decode
+from qslab.runtime.paged_decode import (store_kv_quant, paged_attention_decode,
+                                        materialize_kv)
 
 
 class PagedAttention(nn.Module):
@@ -47,6 +48,28 @@ class PagedAttention(nn.Module):
         self.k_cache = self.v_cache = None      # (packed, scales) tuples
         self.lam = None                         # [H_kv, D] SmoothAttention
         self.lam_q = None                       # [H_q, D] GQA-expanded
+
+    def _materialize_prefix(self, ctx, k, v):
+        """Dequantize the pool-resident prefix of each sequence and prepend
+        it to this batch's freshly computed rows. k/v are [N, H_kv, D] where
+        N covers only the scheduled (new) tokens, ordered by cu_seqlens_q;
+        the returned tensors are ordered by cu_seqlens_k instead (prefix
+        rows first, per sequence), which is what flash-attn consumes.
+
+        The slot plan (prefix_slots + prefix_plan) is computed ONCE per step
+        by prepare_prefill: 28 layers recomputing it with tolist() would pay
+        a GPU sync each, which alone cost more than the saved prefill."""
+        plan = ctx.prefix_plan
+        kp, vp = materialize_kv(self.k_cache, self.v_cache, ctx.prefix_slots,
+                                v_group=self.v_group)
+        k_parts, v_parts = [], []
+        for slot_off, cached, q_start, q_end in plan:
+            if cached > 0:
+                k_parts.append(kp[slot_off:slot_off + cached])
+                v_parts.append(vp[slot_off:slot_off + cached])
+            k_parts.append(k[q_start:q_end])
+            v_parts.append(v[q_start:q_end])
+        return torch.cat(k_parts), torch.cat(v_parts)
 
     def set_smooth_lambda(self, lam: torch.Tensor):
         """lam [H_kv, D] from the calibration file."""
@@ -88,7 +111,14 @@ class PagedAttention(nn.Module):
 
         if ctx.is_prefill:
             # prefill: attention over the fp16 q/k/v directly (varlen, causal);
-            # the KV has been quantized into slots above for later decode reads
+            # the KV has been quantized into slots above for later decode reads.
+            # A prefix-cache hit (or an earlier chunked-prefill block) means
+            # cu_seqlens_k claims a length only the pool holds — flash-attn
+            # would silently attend to misaligned rows (the M8 silent-wrong-
+            # answer bug). Materialize the pool-resident prefix and prepend
+            # it, so the declared lengths finally tell the truth.
+            if ctx.block_tables is not None:
+                k, v = self._materialize_prefix(ctx, k, v)
             o = flash_attn_varlen_func(
                 q.view(-1, self.num_heads, self.head_dim),
                 k.view(-1, self.num_kv_heads, self.head_dim),
