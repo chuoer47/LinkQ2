@@ -388,7 +388,7 @@ class ModelRunner:
             outputs=outputs,
         )
 
-        if config.spec_method == "ngram":
+        if config.spec_method:
             # second family, keyed by bs at fixed M = gamma+1 (vLLM V1:
             # pad proposals to gamma — padding is neutral because the
             # acceptance loop never looks past the real draft count)

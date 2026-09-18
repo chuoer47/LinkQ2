@@ -1,0 +1,11 @@
+=== draft-model (Qwen3-0.6B) spec, gamma=4, graph, greedy, bs=1, 192 tokens ===
+1.7B plain:        natural 147.2 tok/s | copy 147.2 tok/s
+1.7B + 0.6B draft: natural  93.1 tok/s (0.63x) 2.36 tok/step | copy 165.4 tok/s (1.12x) 4.24 tok/step
+8B W4A16KV4 plain:        natural  97.9 | copy  98.0 tok/s
+8B W4A16KV4 + 0.6B draft: natural 71.6 (0.73x) 2.08 tok/step | copy 143.5 (1.47x) 4.24 tok/step
+ngram (gamma=4) for comparison:
+1.7B: copy 455.9 (3.13x) natural 212.3 (1.46x)
+8B:   copy 310.4 (3.19x) natural  93.2 (0.95x)
+bottleneck (measured): draft step = 4.3ms (~2ms GPU forward 0.6B fp16 + lm_head,
+~2ms python/launch/sync per step); gamma=4 -> ~17ms proposal phase per verify step.
+Follow-ups: W4-quantize the draft (halves GPU traffic), fused argmax, lm_head in graph.

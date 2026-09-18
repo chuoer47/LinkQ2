@@ -23,9 +23,11 @@ class Config:
     # speculative decoding (design-m9). n-gram only for now: the proposer is
     # a CPU lookup, the verify forward reuses the paged decode kernel with
     # M = spec_num_drafts + 1 queries per sequence
-    spec_method: str | None = None        # None | "ngram"
+    spec_method: str | None = None        # None | "ngram" | "draft"
     spec_num_drafts: int = 4              # gamma
     spec_ngram_size: int = 3              # lookup window n
+    draft_model: str | None = None        # spec_method="draft": small model
+    draft_gpu_memory_utilization: float = 0.95   # draft pool sizing
 
     def __post_init__(self):
         assert os.path.isdir(self.model)

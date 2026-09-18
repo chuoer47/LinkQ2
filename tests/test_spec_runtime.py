@@ -113,10 +113,13 @@ def test_replay_stub_acceptance():
                 self.prompt_ids = prompt_ids
                 self.cont = continuation
 
-            def propose(self, token_ids, gamma=None):
-                # position in the rollout: len(token_ids) - len(prompt)
-                i = len(token_ids) - len(self.prompt_ids)
-                return self.cont[i:i + 4]
+            def propose_batch(self, seqs):
+                out = []
+                for s in seqs:
+                    # position in the rollout: len(token_ids) - len(prompt)
+                    i = len(s.token_ids) - len(self.prompt_ids)
+                    out.append(self.cont[i:i + 4])
+                return out
         prompt_ids = tok.encode(COPY_PROMPT)
         eng.scheduler.proposer = Replay(prompt_ids, ref)
         with _Counting(eng) as c:

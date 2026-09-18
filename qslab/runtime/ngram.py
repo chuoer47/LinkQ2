@@ -42,3 +42,6 @@ class NGramProposer:
             return []
         p = int(hits[-1])                      # most recent occurrence
         return a[p + n:p + n + g].tolist()
+
+    def propose_batch(self, seqs) -> list[list[int]]:
+        return [self.propose(list(s.token_ids)) for s in seqs]

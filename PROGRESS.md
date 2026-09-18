@@ -139,3 +139,17 @@ R0-R6 全部完成。仓库从"按里程碑堆叠的研究代码"变为五层分
       =3.19×**、自然 0.95×（诚实开销）；复读输出 128/128 逐 token 一致；
       新增 22 测试，全量回归绿
 - 详见 notes/M9-投机推理.md
+
+### M9 续：draft-model 投机迁入（2026-09-18 完成）
+
+- [x] `runtime/draft.py`：chained draft（Qwen3-0.6B）= 第二个完整 runtime
+      （自有 paged int4 池/graph/scheduler，vLLM V1 draft worker 形态）；
+      proposer 接口统一 propose_batch，提案阶段上移 engine
+- [x] 锁步协议：sync 截断（draft KV 前缀天然有效）+ prefill + γ 步紧循环
+      （免调度往返）；修 3 bug（spec_method 只认 ngram / num_cached 漂移越界 /
+      may_append 非幂等）
+- [x] 结果：8B W4A16KV4+0.6B 复读 **143.5 tok/s（1.47×）**；自然文本 0.73×
+      ——瓶颈实测为 draft 每步 4.3ms（0.6B fp16 前向 ~2ms + Python/同步 ~2ms），
+      后续 W4 化 draft / fused argmax；n-gram 与 draft 可按负载互换
+- [x] 新校准 smooth_kv4_qwen3-0.6b.pt；4 个 draft 测试；全量回归绿
+      （31 非 e2e + 14 e2e + 11 spec）

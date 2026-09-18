@@ -26,11 +26,28 @@ class LLMEngine:
         self.tokenizer = AutoTokenizer.from_pretrained(config.model, use_fast=True)
         config.eos = self.tokenizer.eos_token_id
         self.scheduler = Scheduler(config)
+        if config.spec_method == "draft":
+            # a draft model proposer owns a second runtime (runner+scheduler)
+            # for the small model — proposals are GPU forwards, so the
+            # propose phase lives in step(), not in the scheduler
+            import os
+            from qslab.runtime.draft import DraftProposer
+            assert config.draft_model, "spec_method='draft' needs draft_model"
+            calib = "results/smooth_kv4_" + os.path.basename(config.draft_model).lower() + ".pt"
+            assert os.path.exists(calib), f"draft calibration missing: {calib}"
+            self.scheduler.proposer = DraftProposer(
+                config.draft_model, config.spec_num_drafts,
+                config.max_model_len, config.max_num_seqs,
+                gpu_memory_utilization=config.draft_gpu_memory_utilization,
+                smooth_kv=calib)
         atexit.register(self.exit)
 
     def exit(self):
         # idempotent: atexit fires this after a test may already have released
         # the runner to free the card for the next module
+        proposer = getattr(self.scheduler, "proposer", None) if hasattr(self, "scheduler") else None
+        if proposer is not None and hasattr(proposer, "exit"):
+            proposer.exit()
         runner = getattr(self, "model_runner", None)
         if runner is None:
             return
@@ -53,6 +70,7 @@ class LLMEngine:
             # speculative verify step: one M-row forward, greedy acceptance
             # (design-m9). Sequences without drafts ride along padded — their
             # step is semantically an ordinary decode.
+            self._propose(seqs)
             token_ids = self.model_runner.call("run_verify", seqs)
             num_tokens = -self.scheduler.postprocess_verify(seqs, token_ids)
         else:
@@ -60,7 +78,31 @@ class LLMEngine:
             token_ids = self.model_runner.call("run", seqs, is_prefill)
             self.scheduler.postprocess(seqs, token_ids, is_prefill)
         outputs = [(seq.seq_id, seq.completion_token_ids) for seq in seqs if seq.is_finished]
+        if outputs:
+            proposer = getattr(self.scheduler, "proposer", None)
+            if proposer is not None and hasattr(proposer, "drop_seqs"):
+                proposer.drop_seqs([seq_id for seq_id, _ in outputs])
         return outputs, num_tokens
+
+    def _propose(self, seqs):
+        """Fill spec_drafts for the greedy sequences of a verify batch.
+
+        Only greedy: the argmax-equality acceptance rule is a faithful accept
+        only for greedy (temperature sampling needs the ratio rule,
+        design-m9 §7). Non-greedy sequences keep [] and degrade to a plain
+        decode step via padding neutrality."""
+        proposer = self.scheduler.proposer
+        if proposer is None:
+            return
+        greedy = [s for s in seqs if s.temperature <= 1e-3]
+        if not greedy:
+            return
+        drafts = proposer.propose_batch(greedy)
+        gamma = self.scheduler.gamma
+        max_len = self.scheduler.max_model_len
+        for seq, d in zip(greedy, drafts):
+            geff = min(gamma, max_len - len(seq))
+            seq.spec_drafts = [t for t in d if t is not None][:max(0, geff)]
 
     def is_finished(self):
         return self.scheduler.is_finished()

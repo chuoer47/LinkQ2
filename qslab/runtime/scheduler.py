@@ -18,7 +18,7 @@ class Scheduler:
         self.running: deque[Sequence] = deque()
         # speculative decoding (design-m9): n-gram proposals are a CPU
         # lookup run inside schedule(); gamma=0 disables the verify path
-        self.gamma = config.spec_num_drafts if config.spec_method == "ngram" else 0
+        self.gamma = config.spec_num_drafts if config.spec_method else 0
         self.max_model_len = config.max_model_len
         self.proposer = (NGramProposer(config.spec_ngram_size, config.spec_num_drafts)
                          if config.spec_method == "ngram" else None)
@@ -74,11 +74,10 @@ class Scheduler:
                         self.preempt(seq)
                         break
                 else:
-                    # propose only for greedy sequences: the argmax-equality
-                    # acceptance rule is only a faithful accept for greedy
-                    # (temperature sampling needs the ratio rule, §7)
-                    if self.proposer is not None and seq.temperature <= 1e-3:
-                        seq.spec_drafts = self.proposer.propose(seq.token_ids)[:geff]
+                    # proposals are filled in by the engine's propose phase
+                    # (n-gram: CPU lookup; draft model: GPU forwards —
+                    # schedulers should not own model execution)
+                    seq.spec_drafts = []
                     seq.spec_verify = True
                     seq.num_scheduled_tokens = geff + 1
                     seq.is_prefill = False

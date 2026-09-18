@@ -113,10 +113,14 @@ class BlockManager:
         seq.block_table.clear()
 
     def can_append(self, seq: Sequence) -> bool:
-        return len(self.free_block_ids) >= (len(seq) % self.block_size == 1)
+        need = len(seq) % self.block_size == 1 and len(seq.block_table) < seq.num_blocks
+        return len(self.free_block_ids) >= need
 
     def may_append(self, seq: Sequence):
-        if len(seq) % self.block_size == 1:
+        # idempotent: verify steps (and draft syncs) trim the table to
+        # num_blocks, which may already cover the block this step's query
+        # lands in — allocate only when it is genuinely missing
+        if len(seq) % self.block_size == 1 and len(seq.block_table) < seq.num_blocks:
             seq.block_table.append(self._allocate_block())
 
     # --- speculative verify (design-m9 §3): reserve + trim ---
