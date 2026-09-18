@@ -52,3 +52,32 @@ def test_8b_decode_throughput():
         assert tps > 5
     finally:
         _release(eng)
+
+
+def test_8b_speculative_verify():
+    """M9 on the main-line 8B stack (W4 + KV4 + graph + n-gram spec): the
+    verify path must produce the copy-continuation and accept > 1 token/step
+    (Marlin handles the M=5 rows; v1 GEMV would re-read weights per row)."""
+    eng = LLMEngine(model=MODEL, max_model_len=4096, max_num_seqs=8,
+                    enforce_eager=False, gpu_memory_utilization=0.82,
+                    smooth_kv=CALIB, w4=W4,
+                    spec_method="ngram", spec_num_drafts=4)
+    try:
+        prompt = (" The capital of France is Paris. The capital of Germany is Berlin. "
+                  "The capital of Italy is Rome. The capital of France is")
+        committed = 0
+        steps = 0
+        eng.add_request(prompt, SamplingParams(temperature=1e-6, max_tokens=32,
+                                                ignore_eos=True))
+        while not eng.is_finished():
+            _, num = eng.step()
+            if num < 0:
+                committed += -num
+                steps += 1
+        assert steps < 31, f"steps={steps}: no multi-token acceptance"
+        # first token comes from the prefill step (plain postprocess path)
+        assert committed == 32 - 1
+        avg = committed / steps
+        assert avg > 2.0, f"avg committed/step = {avg:.2f}"
+    finally:
+        _release(eng)

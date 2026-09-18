@@ -96,12 +96,15 @@ class PagedAttention(nn.Module):
                 causal=True,
             )
         else:
-            # decode: q is [bs, H, D]; the cache is int4 packed and the kernel
-            # dequantizes tiles on the fly
+            # decode / verify: q is [rows, H, D] — bs rows for decode, bs*M
+            # for a verify forward (M = ctx.verify_m). The cache is int4
+            # packed and the kernel dequantizes tiles on the fly; row m of a
+            # sequence reads keys [0, L+m), so drafts never leak into
+            # earlier rows (their KV sits at higher slot indices).
             assert k_cache is not None and v_cache is not None
             o = paged_attention_decode(
                 q, k_cache, v_cache, ctx.block_tables, ctx.context_lens,
                 block_n=self.block_n, num_kv_heads=self.num_kv_heads,
                 k_scale=self.k_cache[1] if k_cache[1].dim() == 2 else None,
-                v_group=self.v_group)
+                v_group=self.v_group, verify_m=ctx.verify_m)
         return o

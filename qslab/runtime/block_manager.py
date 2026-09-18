@@ -119,6 +119,31 @@ class BlockManager:
         if len(seq) % self.block_size == 1:
             seq.block_table.append(self._allocate_block())
 
+    # --- speculative verify (design-m9 §3): reserve + trim ---
+    # The verify forward stores the KV of all gamma+1 rows BEFORE attention
+    # runs, so the block table must cover position L+gamma-1 up front. After
+    # acceptance the table is trimmed back to the canonical length; rejected
+    # slots live in blocks that go back to the free list with their garbage —
+    # nobody reads past a row's own context length.
+
+    def _verify_blocks(self, seq: Sequence, gamma: int) -> int:
+        return (len(seq) + gamma - 1) // self.block_size + 1
+
+    def can_verify(self, seq: Sequence, gamma: int) -> bool:
+        need = self._verify_blocks(seq, gamma) - len(seq.block_table)
+        return len(self.free_block_ids) >= max(0, need)
+
+    def reserve_verify(self, seq: Sequence, gamma: int):
+        required = self._verify_blocks(seq, gamma)
+        while len(seq.block_table) < required:
+            seq.block_table.append(self._allocate_block())
+
+    def release_tail(self, seq: Sequence):
+        """Free the last block of the table (used by post-verify trim)."""
+        block_id = seq.block_table.pop()
+        self.blocks[block_id].ref_count -= 1
+        self._deallocate_block(block_id)
+
     def hash_blocks(self, seq: Sequence):
         start = seq.num_cached_tokens // self.block_size
         end = (seq.num_cached_tokens + seq.num_scheduled_tokens) // self.block_size

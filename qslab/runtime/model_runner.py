@@ -229,7 +229,11 @@ class ModelRunner:
             input_ids.append(seq.last_token)
             positions.append(len(seq) - 1)
             context_lens.append(len(seq))
-            slot_mapping.append(seq.block_table[-1] * self.block_size + seq.last_block_num_tokens  - 1)
+            # positional: the block holding position len(seq)-1. Exact when
+            # the table is canonical and correct when a verify step left it
+            # longer (block_table[-1] would then point past this token)
+            slot_mapping.append(seq.block_table[seq.num_blocks - 1] * self.block_size
+                                + seq.last_block_num_tokens - 1)
         input_ids = torch.tensor(input_ids, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
         positions = torch.tensor(positions, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
         slot_mapping = torch.tensor(slot_mapping, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
@@ -237,6 +241,74 @@ class ModelRunner:
         block_tables = self.prepare_block_tables(seqs)
         set_context(False, slot_mapping=slot_mapping, context_lens=context_lens, block_tables=block_tables)
         return input_ids, positions
+
+    def prepare_verify(self, seqs: list[Sequence]):
+        """Build the M-row verify batch: [last committed token, drafts...].
+
+        Row m sits at position L-1+m and its KV is stored at that position's
+        slot (the store runs first, inside the attention layer — same
+        store-before-attention ordering as decode). Slots past a sequence's
+        reserved blocks (capped draft windows) get -1 and are skipped.
+        """
+        gamma = self.config.spec_num_drafts
+        M = gamma + 1
+        input_ids = []
+        positions = []
+        slot_mapping = []
+        context_lens = []
+        for seq in seqs:
+            L = len(seq)
+            d = list(seq.spec_drafts or [])[:gamma]
+            input_ids.extend([seq.last_token] + d + [0] * (gamma - len(d)))
+            positions.extend(range(L - 1, L + gamma))
+            context_lens.append(L)
+            for m in range(M):
+                pos = L - 1 + m
+                bi = pos // self.block_size
+                if bi < len(seq.block_table):
+                    slot_mapping.append(seq.block_table[bi] * self.block_size + pos % self.block_size)
+                else:
+                    slot_mapping.append(-1)
+        input_ids = torch.tensor(input_ids, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
+        positions = torch.tensor(positions, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
+        slot_mapping = torch.tensor(slot_mapping, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
+        context_lens = torch.tensor(context_lens, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
+        block_tables = self.prepare_block_tables(seqs)
+        set_context(False, slot_mapping=slot_mapping, context_lens=context_lens,
+                    block_tables=block_tables, verify_m=M)
+        return input_ids, positions
+
+    @torch.inference_mode()
+    def run_model_verify(self, input_ids: torch.Tensor, positions: torch.Tensor, M: int):
+        """All M rows produce logits — acceptance needs every position."""
+        if self.enforce_eager or input_ids.size(0) > 512:
+            hidden = self.model(input_ids, positions)
+            return self.model.compute_logits(hidden)
+        bs = input_ids.size(0) // M
+        context = get_context()
+        graph = self.graphs_verify[next(x for x in self.graph_bs if x >= bs)]
+        graph_vars = self.graph_vars_verify
+        n = bs * M
+        graph_vars["input_ids"][:n] = input_ids
+        graph_vars["positions"][:n] = positions
+        graph_vars["slot_mapping"].fill_(-1)
+        graph_vars["slot_mapping"][:n] = context.slot_mapping
+        graph_vars["context_lens"].zero_()
+        graph_vars["context_lens"][:bs] = context.context_lens
+        graph_vars["block_tables"][:bs, :context.block_tables.size(1)] = context.block_tables
+        graph.replay()
+        return self.model.compute_logits(graph_vars["outputs"][:n])
+
+    def run_verify(self, seqs: list[Sequence]) -> list[int]:
+        """One verify forward; returns the sampled token per row (bs*M)."""
+        gamma = self.config.spec_num_drafts
+        M = gamma + 1
+        input_ids, positions = self.prepare_verify(seqs)
+        temperatures = self.prepare_sample(seqs)
+        logits = self.run_model_verify(input_ids, positions, M)
+        token_ids = self.sampler(logits, temperatures.repeat_interleave(M)).tolist()
+        reset_context()
+        return token_ids
 
     def prepare_sample(self, seqs: list[Sequence]):
         temperatures = [seq.temperature for seq in seqs]
@@ -315,3 +387,35 @@ class ModelRunner:
             block_tables=block_tables,
             outputs=outputs,
         )
+
+        if config.spec_method == "ngram":
+            # second family, keyed by bs at fixed M = gamma+1 (vLLM V1:
+            # pad proposals to gamma — padding is neutral because the
+            # acceptance loop never looks past the real draft count)
+            M = config.spec_num_drafts + 1
+            v_input_ids = torch.zeros(max_bs * M, dtype=torch.int64)
+            v_positions = torch.zeros(max_bs * M, dtype=torch.int64)
+            v_slot_mapping = torch.zeros(max_bs * M, dtype=torch.int32)
+            v_context_lens = torch.zeros(max_bs, dtype=torch.int32)
+            v_block_tables = torch.zeros(max_bs, max_num_blocks, dtype=torch.int32)
+            v_outputs = torch.zeros(max_bs * M, hf_config.hidden_size)
+            self.graphs_verify = {}
+            for bs in reversed(self.graph_bs):
+                graph = torch.cuda.CUDAGraph()
+                set_context(False, slot_mapping=v_slot_mapping[:bs * M],
+                            context_lens=v_context_lens[:bs],
+                            block_tables=v_block_tables[:bs], verify_m=M)
+                v_outputs[:bs * M] = self.model(v_input_ids[:bs * M], v_positions[:bs * M])    # warmup
+                with torch.cuda.graph(graph, self.graph_pool):
+                    v_outputs[:bs * M] = self.model(v_input_ids[:bs * M], v_positions[:bs * M])
+                self.graphs_verify[bs] = graph
+                torch.cuda.synchronize()
+                reset_context()
+            self.graph_vars_verify = dict(
+                input_ids=v_input_ids,
+                positions=v_positions,
+                slot_mapping=v_slot_mapping,
+                context_lens=v_context_lens,
+                block_tables=v_block_tables,
+                outputs=v_outputs,
+            )

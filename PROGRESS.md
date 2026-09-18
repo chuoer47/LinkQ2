@@ -122,3 +122,20 @@ R0-R6 全部完成。仓库从"按里程碑堆叠的研究代码"变为五层分
 
 ### 行为无回归基线（每阶段复测）
 8B W4 e2e 39.8 tok/s | PPL 17.31 | KV4 省 3.5× | lookahead 1.44× | oracle 对齐 PASS
+
+## M9 n-gram 投机解码（2026-09-18 完成）
+
+- [x] M9 方案：docs/design-m9.md（业界依据 vLLM V1 ngram + TGI append-only）
+- [x] L0：decode kernel 通用化 M query（grid (N_Q, bs*M)，因果性=槽位下界，
+      M=1 逐指令等价）；对拍/因果性/-1 防护 7 测试
+- [x] L3：`runtime/ngram.py` proposer（numpy 滑窗，纯 CPU）
+- [x] L4：调度 verify 分支 + `run_verify`（M=γ+1 一次前向）+ greedy 接受 +
+      预留/trim 槽位（append-only 回收）+ padding 中立 + (bs,M) graph 族
+- [x] **Marlin crossover 修正**：M5 微基准 crossover=8 被 e2e 推翻
+      （M=1: 8B 54.1→91.1 tok/s；M=5 verify: 65→11.5ms/步）；
+      **M8 遗留"8B 55.8 未查因"的答案就是 v1 GEMV**；主线 8B decode
+      **97.2 tok/s（1.75×）**；Marlin/v1 数值互差 0.047（无损）
+- [x] 验收：1.7B 复读 3.13×（γ=8 5.77×）；**8B W4A16KV4 复读 310.4 tok/s
+      =3.19×**、自然 0.95×（诚实开销）；复读输出 128/128 逐 token 一致；
+      新增 22 测试，全量回归绿
+- 详见 notes/M9-投机推理.md

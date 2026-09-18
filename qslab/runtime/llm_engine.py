@@ -45,9 +45,20 @@ class LLMEngine:
 
     def step(self):
         seqs, is_prefill = self.scheduler.schedule()
-        num_tokens = sum(seq.num_scheduled_tokens for seq in seqs) if is_prefill else -len(seqs)
-        token_ids = self.model_runner.call("run", seqs, is_prefill)
-        self.scheduler.postprocess(seqs, token_ids, is_prefill)
+        if is_prefill:
+            num_tokens = sum(seq.num_scheduled_tokens for seq in seqs)
+            token_ids = self.model_runner.call("run", seqs, is_prefill)
+            self.scheduler.postprocess(seqs, token_ids, is_prefill)
+        elif any(seq.spec_verify for seq in seqs):
+            # speculative verify step: one M-row forward, greedy acceptance
+            # (design-m9). Sequences without drafts ride along padded — their
+            # step is semantically an ordinary decode.
+            token_ids = self.model_runner.call("run_verify", seqs)
+            num_tokens = -self.scheduler.postprocess_verify(seqs, token_ids)
+        else:
+            num_tokens = -len(seqs)
+            token_ids = self.model_runner.call("run", seqs, is_prefill)
+            self.scheduler.postprocess(seqs, token_ids, is_prefill)
         outputs = [(seq.seq_id, seq.completion_token_ids) for seq in seqs if seq.is_finished]
         return outputs, num_tokens
 

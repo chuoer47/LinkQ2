@@ -92,23 +92,33 @@ class W4MarlinBackend(_BackendBase):
 
 @QUANT_BACKENDS.register("w4.auto")
 class W4AutoBackend(_BackendBase):
-    """Hybrid: v1 GEMV for small M, Marlin GEMM above the crossover.
+    """Marlin wherever it is usable; v1 GEMV only as the fallback.
 
-    The crossover (8) comes from the M5 benchmark table
-    (results/m5_kernel_bench.json): Marlin's ~100us/call fixed cost loses to
-    v1 below M=8, wins clearly above.
+    The M5 microbenchmark concluded v1 wins below M=8 (Marlin's per-call
+    fixed cost), and w4.auto dispatched on that for M5-M8. M9 overturned it
+    e2e, twice, on both models (graph decode, 4090, median of 3):
+
+      M=1  1.7B: v1 145.0 vs Marlin 155.2 tok/s  (x1.07)
+      M=1  8B : v1  54.1 vs Marlin  91.1 tok/s  (x1.69)  <- the "8B 55.8
+      M=5  8B : v1 65ms/step vs Marlin 11.5ms (spec verify: a v1 batch
+      re-reads the weights per row; Marlin reads them once for any M)
+
+    So the microbenchmark's fixed-cost model didn't transfer to a 252-linear
+    forward inside a CUDA graph. Marlin and v1 agree numerically to 0.047
+    logits (both ~4.0 from fp16, i.e. the W4 quantization itself), so the
+    switch costs no accuracy — only the greedy near-tie flips documented in
+    notes/M9. When Marlin is usable the v1 copy is not built at all (it was
+    dead weight: auto previously held BOTH packed layouts in memory).
     """
 
     name = "w4.auto"
     bits = 4
-    CROSSOVER_M = 8
+    CROSSOVER_M = 0
 
     def __init__(self, qfp, scale, group_size, in_features, out_features,
                  act_scale=None):
         super().__init__(qfp, scale, group_size, in_features, out_features,
                          act_scale)
-        self._v1 = W4V1Backend(qfp, scale, group_size, in_features,
-                               out_features, act_scale)
         self._marlin = None
         if W4MarlinBackend.usable(self, in_features, out_features, group_size):
             try:
@@ -117,6 +127,12 @@ class W4AutoBackend(_BackendBase):
                                                act_scale)
             except Exception:
                 self._marlin = None
+        # built only when it can actually be reached (Marlin missing, or a
+        # nonzero crossover someone sets for experimentation)
+        self._v1 = None
+        if self._marlin is None or self.CROSSOVER_M >= 1:
+            self._v1 = W4V1Backend(qfp, scale, group_size, in_features,
+                                   out_features, act_scale)
 
     def usable(self, in_features, out_features, group_size) -> bool:
         return W4V1Backend.usable(self, in_features, out_features, group_size)
@@ -131,10 +147,12 @@ class W4AutoBackend(_BackendBase):
         M = x.numel() // orig[-1] if x.dim() > 1 else 1
         if self._marlin is not None and M > self.CROSSOVER_M:
             return self._marlin.linear(x)
-        return self._v1.linear(x)
+        if self._v1 is not None:
+            return self._v1.linear(x)
+        return self._marlin.linear(x)
 
     def memory_bytes(self) -> int:
-        base = self._v1.memory_bytes()
+        base = self._v1.memory_bytes() if self._v1 else 0
         return base + (self._marlin.memory_bytes() - base // 2 if self._marlin
                        else 0)
 

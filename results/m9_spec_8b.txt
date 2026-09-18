@@ -1,0 +1,10 @@
+=== n-gram spec bench: Qwen3-8B-W4A16KV4 gamma=4 tokens=192 w4=True ===
+copy     off       97.2      1.00    191
+copy     offM      97.6      1.00    191
+copy     on       310.4      3.54     54   x3.19 (x3.18 vs marlin base)
+natural  off       98.0      1.00    191
+natural  offM      97.9      1.00    191
+natural  on        93.2      1.05    182   x0.95 (x0.95 vs marlin base)
+random   off       95.0      1.00    191
+random   offM      94.8      1.00    191
+random   on        89.5      1.05    182   x0.94 (x0.94 vs marlin base)

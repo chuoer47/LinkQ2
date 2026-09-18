@@ -20,6 +20,12 @@ class Config:
     smooth_kv: str | None = None   # SmoothAttention calibration file
     w4: str | None = None          # qslab_w4_v1 dir; swaps in packed weights
     w4_backend: str = "w4.auto"    # w4.v1 / w4.marlin / w4.auto
+    # speculative decoding (design-m9). n-gram only for now: the proposer is
+    # a CPU lookup, the verify forward reuses the paged decode kernel with
+    # M = spec_num_drafts + 1 queries per sequence
+    spec_method: str | None = None        # None | "ngram"
+    spec_num_drafts: int = 4              # gamma
+    spec_ngram_size: int = 3              # lookup window n
 
     def __post_init__(self):
         assert os.path.isdir(self.model)
