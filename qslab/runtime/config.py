@@ -30,6 +30,8 @@ class Config:
     draft_gpu_memory_utilization: float = 0.95   # draft pool sizing
     draft_w4: str | None = None          # packed W4 dir for the draft model
     draft_w4_backend: str = "w4.v1"     # v1 GEMV is built for M=1 decode
+    compile: bool = False                # torch.compile the runtime model
+    compile_mode: str = "default"        # "default" | "max-autotune"
 
     def __post_init__(self):
         assert os.path.isdir(self.model)

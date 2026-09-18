@@ -34,6 +34,14 @@ class ModelRunner:
             assert n > 0, f"no packed weights found under {config.w4}"
             print(f"[w4] swapped {n} linears from {config.w4} "
                   f"(backend={config.w4_backend})")
+        if config.compile:
+            # kernel-fusion lever for the small-model draft (notes/M9 §6):
+            # inductor fuses the ~1500 per-step elementwise/copy kernels;
+            # attention is dynamo-disabled so the global Context never
+            # touches the compiled regions. Compiled during warmup, then
+            # recorded into the CUDA graphs like any other kernels.
+            self.model = torch.compile(self.model, dynamic=True,
+                                       mode=config.compile_mode or None)
         self.sampler = Sampler()
         self.warmup_model()
         self.allocate_kv_cache()

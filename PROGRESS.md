@@ -153,3 +153,14 @@ R0-R6 全部完成。仓库从"按里程碑堆叠的研究代码"变为五层分
       后续 W4 化 draft / fused argmax；n-gram 与 draft 可按负载互换
 - [x] 新校准 smooth_kv4_qwen3-0.6b.pt；4 个 draft 测试；全量回归绿
       （31 非 e2e + 14 e2e + 11 spec）
+
+### M9 续2：draft kernel 融合 + γ 帕累托（2026-09-18 完成）
+
+- [x] W4 化 draft 实验证伪（GEMV 2.50→1.19ms 但步时不变：2241 kernel/步，
+      ~1500 个未融合 elementwise 占 2.6ms——税在 kernel 数不在字节数）
+- [x] **torch.compile 融合**（attention dynamo-disable + inductor 融层间
+      elementwise + 录进手写 CUDA Graph）：**draft 步 4.53→2.59ms（1.75×）**
+- [x] 踩坑修复：inference_mode 差异触发首提案 ~5s 重编译 → init 预热
+- [x] γ 帕累托：自然 **γ=2 1.17×** / 复读 **γ=8 2.30×**；n-gram 统治复读、
+      draft 统治自然文本——两种 proposer 各有主场
+- 11 spec 测试全绿

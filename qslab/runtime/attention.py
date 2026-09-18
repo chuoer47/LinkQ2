@@ -54,6 +54,11 @@ class PagedAttention(nn.Module):
         n_rep = self.num_heads // self.num_kv_heads
         self.lam_q = lam.repeat_interleave(n_rep, dim=0).contiguous()
 
+    # dynamo must not trace this: it reads the global Context (recreated
+    # every step), which would churn guards; with it disabled, torch.compile
+    # graph-breaks here and fuses everything in between — which is the point
+    # of the compiled draft (notes/M9 §6: ~1500 unfused elementwise kernels)
+    @torch._dynamo.disable
     def forward(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor):
         ctx = get_context()
         k_cache, v_cache = self.k_cache, self.v_cache

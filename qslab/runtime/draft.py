@@ -54,7 +54,7 @@ class DraftProposer:
                              max_num_seqs=max_num_seqs,
                              gpu_memory_utilization=gpu_memory_utilization,
                              smooth_kv=smooth_kv, w4=w4,
-                             w4_backend=w4_backend)
+                             w4_backend=w4_backend, compile=True)
         # normally set by LLMEngine; keep the class invariant ourselves so
         # the proposer also works standalone (sequence granularity must
         # match the runner's block size)
@@ -62,6 +62,21 @@ class DraftProposer:
         self.runner = ModelRunner(self.config, 0, [])
         self.sched = Scheduler(self.config)
         self.drafts: dict[int, Sequence] = {}          # target seq_id -> draft seq
+        self._warm()
+
+    def _warm(self):
+        """Compile everything the proposal path will ever run.
+
+        The engine init's graph capture warms the decode path under
+        inference_mode, but propose_batch runs outside it — dynamo treats
+        that as a different guard state and recompiles (~5s) on the FIRST
+        real proposal. A dummy propose here pays that once, before serving.
+        """
+        dummy = Sequence([0] * 8, SamplingParams(temperature=1e-6,
+                                                 max_tokens=1 << 30,
+                                                 ignore_eos=True))
+        self.propose_batch([dummy])
+        self.drop_seqs([dummy.seq_id])
 
     # ---------------- lifecycle ----------------
 

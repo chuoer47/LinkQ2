@@ -1,0 +1,17 @@
+=== kernel-fused draft (torch.compile, inductor, attention dynamo-disabled) ===
+draft step: 4.53 -> 2.59 ms (1.75x). FP16 weights (W4 was falsified earlier:
+kernel count, not bytes, was the tax).
+gamma sweep, 8B W4A16KV4 + compiled 0.6B draft, graph, greedy, bs=1, 192 tok:
+gamma | natural tok/s (x) | copy tok/s (x)
+    1 | 105.2 (1.07x)     | 123.4 (1.26x)
+    2 | 114.4 (1.17x)     | 159.2 (1.62x)   <- natural optimum
+    3 |  98.0 (1.00x)     | 176.5 (1.80x)
+    4 |  97.5 (1.00x)     | 184.1 (1.88x)
+    6 |  81.7 (0.83x)     | 202.4 (2.06x)
+    8 |  78.6 (0.80x)     | 225.1 (2.30x)   <- copy optimum (gamma=10 falls)
+vs unfused: natural gamma=2 0.85->1.17x; copy gamma=8 1.45->2.30x.
+vs n-gram (gamma=4: copy 3.19x, natural 0.95x): n-gram still owns copy;
+draft now owns natural (its raison d'etre).
+Caveat found & fixed: dynamo guard state differs between inference_mode
+(capture warmup) and the propose loop -> one ~5s recompile on first real
+proposal; DraftProposer._warm() pays it at init.
