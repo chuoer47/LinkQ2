@@ -174,3 +174,12 @@ R0-R6 全部完成。仓库从"按里程碑堆叠的研究代码"变为五层分
 - [x] spec 提交补 hash_blocks（投机序列也能贡献缓存条目）
 - [x] 验收：8B 3800-token 前缀 **TTFT 558.3→63.0ms（8.86×）**；1.7B 2.73×；
       171-token 复现实验输出正确（错误前导 0 消失）；全量回归绿
+
+### 收尾：文档脉络重写 + 证据链整理（2026-09-18 完成）
+
+- [x] docs/ARCHITECTURE.md：统一入口（分层/M0-M9 主线/最终状态/两代引擎/已知限制），
+      旧设计稿 stub 化归档至 docs/archive/（cc2bc45）
+- [x] README 重写指向 ARCHITECTURE.md（headline 数字更新为 M9 口径）
+- [x] benchmarks/ 按主题 8 分类 + 每类证据链 README + benchmarks/README.md 总索引；
+      脚本 sys.path 修正，import 实测通过（5be9b7b）
+- [x] TODO.md：3 项证据链缺环 + 7 项功能遗留
