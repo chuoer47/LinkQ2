@@ -327,14 +327,99 @@ class ModelRunner:
         graph.replay()
         return self.model.compute_logits(graph_vars["outputs"][:n])
 
-    def run_verify(self, seqs: list[Sequence]) -> list[int]:
-        """One verify forward; returns the sampled token per row (bs*M)."""
+    @staticmethod
+    def _flat_drafts(seqs: list[Sequence], M: int):
+        """[bs*M] draft token per verify row, -1 where there is no draft.
+
+        Row m of a sequence verifies drafts[m] (its input is the token at
+        position m-1 of the window), so the bonus row and the padded tail get
+        no proposal and are sampled plainly.
+        """
+        gamma = M - 1
+        flat = []
+        for seq in seqs:
+            d = list(seq.spec_drafts or [])[:gamma]
+            flat.extend(d + [-1] * (M - len(d)))
+        return torch.tensor(flat, dtype=torch.int64,
+                            pin_memory=True).cuda(non_blocking=True)
+
+    @staticmethod
+    def rejection_verify(logits: torch.Tensor, temperatures: torch.Tensor,
+                         drafts: torch.Tensor, draft_probs: torch.Tensor | None,
+                         sampled: torch.Tensor) -> torch.Tensor:
+        """Leviathan probability-ratio acceptance for the temperature rows.
+
+        For a draft token x proposed under distribution p, against the target's
+        q at this row: accept x with probability min(1, q(x)/p(x)); on refusal
+        resample from normalized max(0, q - p). That leaves the target's
+        distribution exactly unchanged (the losslessness proof), and has two
+        consequences this method relies on:
+
+          * an accepted row returns x and a rejected row returns a token that
+            can never be x, so the scheduler's existing "walk while the row
+            equals the draft" prefix loop needs no change of its own;
+          * a deterministic proposal (n-gram lookup, or an argmax draft step)
+            is p = one-hot at x, so p(x) = 1 and the rule becomes "accept x
+            with probability q(x)" while the residual becomes q with x's mass
+            removed — at temperature -> 0 that is exactly the argmax-equality
+            test. A proposer signals one-hot by passing draft_probs=None.
+
+        Rows that are not speculative (draft == -1) and rows whose sequence is
+        greedy keep the plain sample from `sampled` untouched.
+
+        Why greedy stays on its own path: near temperature 0 the softmax
+        saturates, so a clear argmax is decided deterministically — but a
+        near-tie between two logits lands within float error of q(x) < 1 and
+        would turn into a coin flip. That is the same near-tie chaos the M8
+        batch-drift analysis measured, and the existing token-identical
+        losslessness checks must not inherit it.
+        """
+        out = sampled.clone()
+        has_draft = drafts >= 0
+        rows = has_draft & (temperatures > 1e-3)
+        if not bool(rows.any()):
+            return out
+        t = temperatures[rows].unsqueeze(1)
+        q = torch.softmax(logits[rows].float().div_(t), dim=-1)
+        x = drafts[rows]
+        one_hot = draft_probs is None
+        if one_hot:
+            p_x = torch.ones_like(x, dtype=torch.float32)
+            residual = q.clone()
+        else:
+            p = draft_probs[rows].float()
+            p_x = p.gather(1, x.unsqueeze(1)).squeeze(1)
+            residual = (q - p).clamp_min(0)
+        q_x = q.gather(1, x.unsqueeze(1)).squeeze(1)
+        accept = torch.rand(q_x.shape, device=q.device) < (q_x / p_x.clamp_min(1e-12)).clamp(max=1.0)
+        if one_hot:
+            # max(0, q - delta_x): every entry of q except x's own
+            residual.scatter_(1, x.unsqueeze(1), 0.0)
+        total = residual.sum(1, keepdim=True)
+        residual = torch.where(total > 0, residual / total.clamp_min(1e-12), q)
+        resampled = torch.multinomial(residual, 1).squeeze(1)
+        idx = rows.nonzero(as_tuple=True)[0]
+        out[idx[accept]] = x[accept]
+        out[idx[~accept]] = resampled[~accept]
+        return out
+
+    def run_verify(self, seqs: list[Sequence],
+                   draft_probs: torch.Tensor | None = None) -> list[int]:
+        """One verify forward; returns the committed token per row (bs*M).
+
+        `draft_probs` is the [bs*M, V] distribution the proposals were drawn
+        from, for proposers that sample (a draft model). None means every
+        proposal was deterministic, i.e. one-hot.
+        """
         gamma = self.config.spec_num_drafts
         M = gamma + 1
         input_ids, positions = self.prepare_verify(seqs)
-        temperatures = self.prepare_sample(seqs)
+        temperatures = self.prepare_sample(seqs).repeat_interleave(M)
         logits = self.run_model_verify(input_ids, positions, M)
-        token_ids = self.sampler(logits, temperatures.repeat_interleave(M)).tolist()
+        token_ids = self.sampler(logits, temperatures)
+        drafts = self._flat_drafts(seqs, M)
+        token_ids = self.rejection_verify(logits, temperatures, drafts,
+                                          draft_probs, token_ids).tolist()
         reset_context()
         return token_ids
 

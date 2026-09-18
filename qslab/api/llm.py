@@ -1,112 +1,124 @@
 """L4: the public qslab interface — ``LLM(model_path).generate(...)``.
 
-This is the only entry point users need. It assembles the layers:
-  - L2 models:  the Qwen3 backbone + optional W4 quantized linears
-  - L1 quant:   the W4 backend and the KV cache strategy
-  - L3 engine:  the decode loop, or the speculative loop with a draft model
+This is the only entry point users need. It wraps the mainline runtime
+(``qslab/runtime``, M8+): paged int4 KV pool, continuous batching, CUDA graphs,
+W4 packed weights and speculative decoding.
 
-Everything above the engine (tokenization, batching of prompts, result
-formatting) lives here so the engine stays a pure loop.
+The frozen M0-M7 engine (``qslab/engine``) deliberately has no facade here — it
+stays reachable as ``qslab.engine.QslabEngine``, which is how the M0-M7
+benchmark scripts and the oracle cross-checks already construct it.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
 
-from qslab.config import EngineConfig
-from qslab.engine import QslabEngine
-from qslab.engine.spec import SpeculativeEngine
+from qslab.runtime.llm_engine import LLMEngine
+from qslab.runtime.sampling_params import SamplingParams as _RuntimeParams
+
+# The runtime has no greedy branch — it always samples, and dividing the logits
+# by 1e-6 makes softmax an argmax one-hot. That is the convention every runtime
+# test and the draft proposer already use.
+GREEDY = 1e-6
 
 
-@dataclass
+@dataclass(slots=True)
 class SamplingParams:
-    """Decode-time knobs (greedy by default — matches the M0-M6 protocol)."""
+    """Decode-time knobs. Greedy by default, matching the M0+ measurement protocol."""
     max_tokens: int = 128
-    temperature: float = 0.0       # 0.0 = greedy
-    top_k: int = 0
-    top_p: float = 1.0
-    stop_token_id: int | None = None
+    temperature: float = GREEDY
+    ignore_eos: bool = False
+
+    def __post_init__(self):
+        if self.temperature <= 0.0:
+            self.temperature = GREEDY
+
+    def to_runtime(self) -> _RuntimeParams:
+        return _RuntimeParams(temperature=self.temperature,
+                              max_tokens=self.max_tokens,
+                              ignore_eos=self.ignore_eos)
 
 
 class LLM:
-    """Unified qslab entry point.
+    """Unified qslab entry point over the runtime.
 
     Example:
         llm = LLM("models/Qwen3-8B", w4="models/Qwen3-8B-qslab-w4-awq",
-                  kv_mode="kv4", kv_plan="results/kv4_plan_8b.json")
-        print(llm.generate(" The capital of France is", SamplingParams(max_tokens=32)))
+                  smooth_kv="results/smooth_kv4_qwen3-8b.pt")
+        print(llm.generate(" The capital of France is",
+                           SamplingParams(max_tokens=32))["text"])
+
+    Unrecognised keywords pass straight through to ``qslab.runtime.config.Config``,
+    so any runtime knob (``enforce_eager``, ``gpu_memory_utilization``,
+    ``kvcache_block_size`` ...) is reachable without duplicating its signature.
     """
 
     def __init__(self, model_path: str | Path, *,
-                 device: str = "cuda:0",
-                 w4: str | None = None,            # packed checkpoint dir
-                 w4_backend: str = "w4.auto",      # w4.v1 | w4.marlin | w4.auto
-                 kv_mode: str = "fp16",            # fp16 | kv8 | kv4
-                 kv_plan: str | None = None,       # kv4 plan json
-                 draft: str | None = None,         # draft model path (enables spec)
-                 spec_mode: str = "lookahead",     # chained | lookahead | dynamic
-                 spec_gamma: int = 4):
+                 w4: str | None = None,               # qslab_w4_v1 packed dir
+                 w4_backend: str = "w4.auto",         # w4.v1 | w4.marlin | w4.auto
+                 smooth_kv: str | None = None,        # SmoothAttention calibration
+                 spec: str | None = None,             # ngram | lookahead | draft
+                 spec_gamma: int = 4,
+                 spec_ngram_size: int = 3,
+                 spec_lookahead_span: int = 8,
+                 spec_adaptive_gamma: bool = False,
+                 draft: str | None = None,            # draft model dir (spec="draft")
+                 draft_w4: str | None = None,
+                 draft_w4_backend: str = "w4.v1",
+                 **runtime_config):
         self.model_path = str(model_path)
-        self.cfg = EngineConfig(model_path=Path(model_path), device=device)
-
-        # ---- assemble the target engine (L3) with the KV strategy (L1) ----
-        self._target = QslabEngine(self.cfg, kv_mode=kv_mode, kv_plan_path=kv_plan)
-
-        # ---- optional W4 quantization (L1 backend mounted on L2 linears) ----
-        self.w4 = w4
-        if w4:
-            from qslab.models.w4linear import swap_w4_linears
-            n = swap_w4_linears(self._target.model, w4, backend=w4_backend)
-            self._swapped = n
-
-        # ---- optional speculative decoding (L3) ----
-        self.draft_path = draft
-        if draft:
-            from qslab.engine.spec import SpeculativeEngine as _SE
-            draft_cfg = EngineConfig(model_path=Path(draft), device=device)
-            self._engine = _SE(self.cfg, draft_cfg, gamma=spec_gamma,
-                               target_engine=self._target, mode=spec_mode)
-        else:
-            self._engine = self._target
-
-        self._tokenizer = None
+        if spec == "draft":
+            assert draft, "spec='draft' needs draft=<model dir>"
+        elif draft:
+            raise ValueError(f"draft model given but spec={spec!r} — use spec='draft'")
+        self._engine = LLMEngine(
+            self.model_path, w4=w4, w4_backend=w4_backend, smooth_kv=smooth_kv,
+            spec_method=spec, spec_num_drafts=spec_gamma,
+            spec_ngram_size=spec_ngram_size,
+            spec_lookahead_span=spec_lookahead_span,
+            spec_adaptive_gamma=spec_adaptive_gamma,
+            draft_model=draft, draft_w4=draft_w4,
+            draft_w4_backend=draft_w4_backend, **runtime_config)
 
     # ------------------------------------------------------------------
     @property
     def tokenizer(self):
-        """Lazy adapter (the only transformers-touching part of qslab)."""
-        if self._tokenizer is None:
-            from adapters.tokenizer import QwenTokenizerAdapter
-            self._tokenizer = QwenTokenizerAdapter(self.model_path)
-        return self._tokenizer
+        return self._engine.tokenizer
 
     @property
     def stats(self) -> dict:
-        """Last-call statistics (acceptance rate etc. when speculating)."""
-        return getattr(self._engine, "last_stats", {})
+        """Speculative counters for the last call: steps / proposals / accepted
+        / committed plus acceptance_rate and mean_len (tokens per verify step,
+        i.e. the speedup the window buys). Empty when speculation is off."""
+        sched = self._engine.scheduler
+        return dict(sched.spec_stats) if sched.gamma else {}
 
     def generate(self, prompt: str | list[int],
                  params: SamplingParams | None = None) -> dict:
-        """Greedy decode (M0-M6 protocol). Returns {'text', 'token_ids', 'stats'}."""
+        """One prompt. Returns {'text', 'token_ids', 'stats'}."""
+        return self.generate_batch([prompt], params)[0]
+
+    def generate_batch(self, prompts: list[str | list[int]],
+                       params: SamplingParams | None = None) -> list[dict]:
+        """Several prompts, run through the scheduler's continuous batching."""
         p = params or SamplingParams()
-        ids = self.tokenizer.encode(prompt) if isinstance(prompt, str) else list(prompt)
-        if isinstance(self._engine, SpeculativeEngine):
-            out = self._engine.generate(ids, max_new_tokens=p.max_tokens,
-                                        eos_id=p.stop_token_id)
-        else:
-            out = self._engine.generate(ids, max_new_tokens=p.max_tokens,
-                                        eos_id=p.stop_token_id)
-        return {"text": self.tokenizer.decode(out), "token_ids": out,
-                "stats": dict(self.stats)}
+        self._engine.scheduler.reset_spec_stats()
+        out = self._engine.generate(prompts, p.to_runtime(), use_tqdm=False)
+        stats = self.stats
+        return [{"text": o["text"], "token_ids": o["token_ids"], "stats": stats}
+                for o in out]
 
     def kv_memory_bytes(self) -> int:
-        caches = self._target.kv_caches
-        return sum(c.memory_bytes_valid() for c in caches)
+        """Resident int4 KV pool (all layers, K and V plus their scales)."""
+        pool = getattr(self._engine.model_runner, "kv_cache", None) or []
+        return sum(t.numel() * t.element_size()
+                   for (kq, ks), (vq, vs) in pool for t in (kq, ks, vq, vs))
 
     def weight_memory_bytes(self) -> int:
-        total = 0
-        for m in self._target.model.modules():
-            fn = getattr(m, "weight_memory_bytes", None)
-            if fn is not None:
-                total += fn()
-        return total
+        """Packed W4 modules plus whatever stays in fp16 (embeddings, norms)."""
+        model = self._engine.model_runner.model
+        packed = sum(m.weight_memory_bytes() for m in model.modules()
+                     if hasattr(m, "weight_memory_bytes"))
+        # W4Linear holds its weights in buffers, so parameters() covers exactly
+        # the modules that were not swapped
+        return packed + sum(p.numel() * p.element_size() for p in model.parameters())

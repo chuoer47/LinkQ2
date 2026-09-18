@@ -11,6 +11,19 @@ separate draft worker with its own engine) rather than a bolt-on cache, and
 it means drafting reuses the same store/schedule/acceptance discipline the
 target uses — no new KV code.
 
+Proposer interface (what the engine's acceptance rule may assume):
+  ``propose_batch(seqs) -> list[list[int]]`` and, for a proposer that *samples*
+  its proposals, ``propose_probs``: a [bs*(gamma+1), V] float32 tensor whose row
+  ``i*(gamma+1)+m`` is the exact distribution proposal ``m`` of sequence ``i``
+  was drawn from (zero rows where there is no proposal). A proposer that never
+  sets the attribute is read as "proposals were deterministic", i.e. p is
+  one-hot — which is true for the n-gram/lookahead lookups and for a greedy
+  draft, and lets the ratio test collapse to the argmax check.
+
+Drafting temperature therefore matters for correctness, not just quality: this
+proposer samples, so it must report the distribution behind every token, and it
+drafts at each target sequence's own temperature rather than always greedy.
+
 Lockstep protocol (per propose_batch call, before the target's verify):
   1. SYNC: each draft sequence is truncated to the target's committed tokens.
      The draft's KV below the committed prefix is valid by construction: it
@@ -20,7 +33,7 @@ Lockstep protocol (per propose_batch call, before the target's verify):
   2. CATCHUP + DRAFT: gamma plain decode steps through the draft scheduler
      (batched across sequences). The first step processes the target's last
      committed token — its KV slot is the one the bonus token invalidated —
-     and each step's greedy sample is the next proposal.
+     and each step's sample is the next proposal.
   3. Proposals = the tokens the draft appended beyond the committed prefix.
 
 The draft's block table is trimmed on sync so can_append/may_append stay
@@ -37,6 +50,30 @@ from qslab.runtime.sampler import Sampler  # noqa: F401  (import order sanity)
 from qslab.runtime.sampling_params import SamplingParams
 from qslab.runtime.scheduler import Scheduler
 from qslab.runtime.sequence import Sequence
+
+
+def _sample_rows(logits: torch.Tensor, temps: list[float]):
+    """(tokens, probs) — the sample *and* the distribution behind it.
+
+    The target's ratio test needs p exactly, so every sampling site here has to
+    hand it back. A fully greedy batch skips it: the vocab-wide softmax is the
+    price of the ratio test and has no business landing on the greedy draft
+    path that M9 benchmarked. Greedy rows take argmax rather than a draw even
+    in a mixed batch — at temperature -> 0 the softmax saturates so a draw is
+    already an argmax, but a near-tie would make the draft's choice a coin
+    flip, and a deterministic proposal is the case the one-hot fast path (and
+    the token-identical losslessness checks) relies on.
+    """
+    if max(temps) <= 1e-3:
+        return logits.argmax(dim=-1), None
+    t = torch.tensor(temps, dtype=torch.float32, device=logits.device)
+    probs = torch.softmax(logits.float().div_(t.unsqueeze(1)), dim=-1)
+    tok = probs.argmax(dim=-1)
+    sampled = t > 1e-3
+    if bool(sampled.any()):
+        tok = tok.clone()
+        tok[sampled] = torch.multinomial(probs[sampled], 1).squeeze(1)
+    return tok, probs
 
 
 class DraftProposer:
@@ -62,6 +99,9 @@ class DraftProposer:
         self.runner = ModelRunner(self.config, 0, [])
         self.sched = Scheduler(self.config)
         self.drafts: dict[int, Sequence] = {}          # target seq_id -> draft seq
+        # proposer interface: [bs*(gamma+1), V] rows for the last call, or None
+        # when every sequence in it was greedy (see the module docstring)
+        self.propose_probs: torch.Tensor | None = None
         self._warm()
 
     def _warm(self):
@@ -81,10 +121,13 @@ class DraftProposer:
     # ---------------- lifecycle ----------------
 
     def _make_draft(self, target: Sequence) -> Sequence:
-        # drafts run greedy; it never finishes on its own (huge budget,
-        # ignore eos) — its lifecycle follows the target's
-        sp = SamplingParams(temperature=1e-6, max_tokens=1 << 30,
-                            ignore_eos=True)
+        # the draft follows its target's temperature: the ratio test needs the
+        # distribution a proposal actually came from, so a temperature-1
+        # sequence must not be served temperature-0 proposals. It never
+        # finishes on its own (huge budget, ignore eos) — its lifecycle
+        # follows the target's
+        sp = SamplingParams(temperature=target.temperature,
+                            max_tokens=1 << 30, ignore_eos=True)
         d = Sequence(list(target.token_ids), sp)
         self.sched.add(d)
         self.drafts[target.seq_id] = d
@@ -157,37 +200,88 @@ class DraftProposer:
         # from here are proposals (for a fresh draft the prefill's own sample
         # is the first one)
         starts = {d.seq_id: len(d.token_ids) for _, d in targets}
+        # proposal index -> distribution it was drawn from, per draft sequence,
+        # appended in the order the tokens land in the stream
+        rows: dict[int, list[torch.Tensor]] = {}
 
         # one prefill pass if any draft is fresh (flash prefill writes its
-        # prompt KV; the prefill's sample is that draft's first proposal)
+        # prompt KV; the prefill's sample is that draft's first proposal, so
+        # its distribution has to be captured with it)
         if self.sched.waiting:
             draft_seqs, is_prefill = self.sched.schedule()
             assert is_prefill
-            token_ids = self.runner.call("run", draft_seqs, True)
+            token_ids, probs = self._prefill_capture(draft_seqs)
             self.sched.postprocess(draft_seqs, token_ids, True)
+            for i, d in enumerate(draft_seqs):
+                if d.temperature > 1e-3:
+                    rows[d.seq_id] = [probs[i:i + 1]]
 
-        self._draft_steps([d for _, d in targets])
+        self._draft_steps([d for _, d in targets], rows)
         out = []
+        proposals = []
         for t, d in targets:
             start = starts[d.seq_id]
-            out.append(list(d.token_ids[start:start + self.gamma]))
+            props = list(d.token_ids[start:start + self.gamma])
+            out.append(props)
+            r = rows.get(d.seq_id)
+            kept = r[:len(props)] if r else []
+            proposals.append(kept or None)
+        self.propose_probs = self._assemble_probs(proposals, len(seqs))
         return out
 
-    def _draft_steps(self, draft_seqs: list[Sequence]) -> list[list[int]]:
-        """gamma tight greedy decode steps, batched across draft sequences.
+    def _prefill_capture(self, draft_seqs: list[Sequence]):
+        """The draft's prefill, keeping the softmax behind proposal 0.
+
+        Same calls as ``runner.run(seqs, True)`` — that path throws the
+        distribution away, and a proposal whose p is unknown cannot be
+        ratio-tested losslessly.
+        """
+        mr = self.runner
+        input_ids, positions = mr.prepare_prefill(draft_seqs)
+        logits = mr.run_model(input_ids, positions, True)
+        tok, probs = _sample_rows(logits, [d.temperature for d in draft_seqs])
+        reset_context()
+        return tok.tolist(), probs
+
+    def _assemble_probs(self, per_seq, bs: int) -> torch.Tensor | None:
+        """[bs*(gamma+1), V] rows laid out the way the verify batch is flat.
+
+        Row ``i*(gamma+1)+m`` is the distribution behind proposal ``m`` of
+        sequence ``i`` (the acceptance walk reads row m for drafts[m]). Bonus
+        rows, padded rows and greedy sequences stay zero — the acceptance mask
+        never looks at them. float32, not the fp16 the model runs in: a
+        low-probability proposal must not underflow p(x) to 0, which would
+        silently turn a rejection into a certain accept.
+        """
+        if not any(per_seq):
+            return None
+        M = self.gamma + 1
+        vocab = next(r[0].shape[-1] for r in per_seq if r)
+        mat = torch.zeros(bs * M, vocab, dtype=torch.float32, device="cuda")
+        for i, r in enumerate(per_seq):
+            if not r:
+                continue
+            for m, row in enumerate(r):
+                mat[i * M + m] = row[0]
+        return mat
+
+    def _draft_steps(self, draft_seqs: list[Sequence],
+                     rows: dict[int, list[torch.Tensor]]):
+        """gamma tight decode steps, batched across draft sequences.
 
         This bypasses the scheduler round-trips (schedule/postprocess per
         step) that cost more than the 0.6B forward itself: the draft window's
         slots are reserved up front (same position-driven discipline as the
-        target's verify), each step is prepare -> graph replay -> argmax ->
+        target's verify), each step is prepare -> graph replay -> sample ->
         append, and the next sync trims whatever the window over-reserved.
+        Each sequence samples at its own temperature (greedy stays argmax), and
+        the distribution behind every appended proposal is recorded in `rows`.
         Pool pressure: a sequence whose window cannot be reserved drafts
         nothing this round (padding neutrality makes that a plain step).
         """
         gamma = self.gamma
         mr = self.runner
         bm = self.sched.block_manager
-        bs = len(draft_seqs)
         active = []
         for d in draft_seqs:
             required = (len(d) + gamma - 1) // bm.block_size + 1
@@ -210,14 +304,17 @@ class DraftProposer:
             positions = torch.tensor(positions, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
             slots = torch.tensor(slots, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
             ctx = torch.tensor(ctx, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
+            temps = [d.temperature for d in active]
             max_len = max(len(d.block_table) for d in active)
             bt = [d.block_table + [-1] * (max_len - len(d.block_table)) for d in active]
             bt = torch.tensor(bt, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
             set_context(False, slot_mapping=slots, context_lens=ctx, block_tables=bt)
             logits = mr.run_model(input_ids, positions, False)
             reset_context()
-            tok = logits.float().argmax(dim=-1).tolist()
-            for d, t in zip(active, tok):
+            tok, probs = _sample_rows(logits, temps)
+            tok = tok.tolist()
+            for i, (d, t) in enumerate(zip(active, tok)):
                 d.append_token(t)
                 d.num_cached_tokens += 1
-        return draft_seqs
+                if d.temperature > 1e-3:
+                    rows.setdefault(d.seq_id, []).append(probs[i:i + 1])

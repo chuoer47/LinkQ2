@@ -3,7 +3,7 @@ from collections import deque
 from qslab.runtime.config import Config
 from qslab.runtime.sequence import Sequence, SequenceStatus
 from qslab.runtime.block_manager import BlockManager
-from qslab.runtime.ngram import NGramProposer
+from qslab.runtime.ngram import NGramProposer, LookaheadProposer
 
 
 class Scheduler:
@@ -16,12 +16,29 @@ class Scheduler:
         self.block_manager = BlockManager(config.num_kvcache_blocks, config.kvcache_block_size)
         self.waiting: deque[Sequence] = deque()
         self.running: deque[Sequence] = deque()
-        # speculative decoding (design-m9): n-gram proposals are a CPU
-        # lookup run inside schedule(); gamma=0 disables the verify path
+        # speculative decoding (design-m9): proposals are filled in by the
+        # engine's propose phase; gamma=0 disables the verify path
         self.gamma = config.spec_num_drafts if config.spec_method else 0
         self.max_model_len = config.max_model_len
-        self.proposer = (NGramProposer(config.spec_ngram_size, config.spec_num_drafts)
-                         if config.spec_method == "ngram" else None)
+        if config.spec_method == "ngram":
+            self.proposer = NGramProposer(config.spec_ngram_size, config.spec_num_drafts)
+        elif config.spec_method == "lookahead":
+            # M6's self-proposer, migrated: persistent index + chain extension
+            self.proposer = LookaheadProposer(config.spec_ngram_size,
+                                              config.spec_num_drafts,
+                                              span=config.spec_lookahead_span)
+        else:
+            # "draft": the engine owns the proposer (it needs a second runtime)
+            self.proposer = None
+        # acceptance counters for the last generate() (facade stats), and the
+        # adaptive draft window. Only worth adapting for a proposer that spends
+        # a forward per draft — the lookups are free, so shrinking their window
+        # would only lose accepted tokens.
+        self._spec = {"steps": 0, "proposals": 0, "accepted": 0, "committed": 0}
+        self.adaptive_gamma = (config.spec_adaptive_gamma
+                               and config.spec_method == "draft")
+        self._recent: deque[int] = deque(maxlen=4)
+        self.proposal_gamma = self.gamma
 
     def is_finished(self):
         return not self.waiting and not self.running
@@ -109,17 +126,22 @@ class Scheduler:
         self.waiting.appendleft(seq)
 
     def postprocess_verify(self, seqs: list[Sequence], token_ids: list[int]) -> int:
-        """Accept greedy drafts, commit accepted + bonus, trim the block table.
+        """Accept the matched prefix, commit accepted + bonus, trim the table.
 
-        token_ids is the sampled token per verify row (bs*M flattened, row m
-        = the prediction at position L-1+m). Acceptance is the longest prefix
-        where the sample equals the draft; the row after the last accepted
-        draft contributes the bonus token. With temperature -> 0 the sample
-        IS argmax, which makes the committed sequence mathematically equal to
-        plain greedy decoding (Leviathan). Returns tokens committed.
+        token_ids is the accepted token per verify row (bs*M flattened, row m
+        = the decision for drafts[m]). Acceptance is the longest prefix where
+        the row equals the draft; the row after the last accepted draft
+        contributes the bonus token. The rows come from the ratio rule in
+        ModelRunner.rejection_verify, which on refusal resamples from
+        max(0, q - p) and therefore can never hand back a rejected row's own
+        draft token — that is what makes this plain prefix walk the correct
+        acceptance for sampled proposals as well as greedy ones, where the rule
+        degenerates to the argmax check (Leviathan). Returns tokens committed.
         """
         M = self.gamma + 1
         committed = 0
+        accepted = 0
+        proposals = 0
         for i, seq in enumerate(seqs):
             row = token_ids[i * M:(i + 1) * M]
             drafts = list(seq.spec_drafts or [])
@@ -128,6 +150,8 @@ class Scheduler:
             while a < k and row[a] == drafts[a]:
                 a += 1
             appended = drafts[:a] + [row[a]]
+            accepted += a
+            proposals += k
             # a draft can hit eos or the token budget mid-list: commit up to
             # that point and finish, exactly like the one-token path would
             budget = seq.max_tokens - seq.num_completion_tokens
@@ -160,7 +184,55 @@ class Scheduler:
                 seq.status = SequenceStatus.FINISHED
                 self.block_manager.deallocate(seq)
                 self.running.remove(seq)
+        self._spec["steps"] += 1
+        self._spec["proposals"] += proposals
+        self._spec["accepted"] += accepted
+        self._spec["committed"] += committed
+        if self.adaptive_gamma:
+            # accept_len per sequence, which is what the window trades on: the
+            # bonus token is free and independent of it
+            self._recent.append(accepted / max(1, len(seqs)))
+            self._adapt_gamma()
         return committed
+
+    # ---------------- speculation reporting + adaptive window ----------------
+
+    @property
+    def spec_stats(self) -> dict:
+        """Counters over the verify steps run so far, plus what they mean.
+
+        acceptance_rate = accepted drafts / proposed; mean_len = tokens
+        committed per verify step, i.e. the speedup the window is buying
+        (1.0 means speculation is pure overhead).
+        """
+        s = dict(self._spec)
+        s["acceptance_rate"] = s["accepted"] / s["proposals"] if s["proposals"] else 0.0
+        s["mean_len"] = s["committed"] / s["steps"] if s["steps"] else 0.0
+        return s
+
+    def reset_spec_stats(self):
+        self._spec = {"steps": 0, "proposals": 0, "accepted": 0, "committed": 0}
+        self._recent.clear()
+        self.proposal_gamma = self.gamma
+
+    def _adapt_gamma(self):
+        """Ported from the frozen DynamicMode, clamped to the captured window.
+
+        Growing past spec_num_drafts is not on the table: M is baked into the
+        verify CUDA-graph family, so the configured gamma *is* the ceiling and
+        adaptation can only spend fewer draft forwards. Near-full acceptance
+        restores the whole window, a round that lands nothing halves it, and
+        anything in between holds still — that gap is the hysteresis that keeps
+        the window from oscillating every step.
+        """
+        recent = list(self._recent)[-3:]
+        if not recent:
+            return
+        avg = sum(recent) / len(recent)
+        if avg >= self.gamma - 0.1:
+            self.proposal_gamma = self.gamma
+        elif avg <= 1.0:
+            self.proposal_gamma = max(1, self.gamma // 2)
 
     def postprocess(self, seqs: list[Sequence], token_ids: list[int], is_prefill: bool):
         for seq, token_id in zip(seqs, token_ids):

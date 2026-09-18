@@ -23,9 +23,13 @@ class Config:
     # speculative decoding (design-m9). n-gram only for now: the proposer is
     # a CPU lookup, the verify forward reuses the paged decode kernel with
     # M = spec_num_drafts + 1 queries per sequence
-    spec_method: str | None = None        # None | "ngram" | "draft"
+    spec_method: str | None = None        # None | "ngram" | "lookahead" | "draft"
     spec_num_drafts: int = 4              # gamma
     spec_ngram_size: int = 3              # lookup window n
+    # shrink/raise the draft window per sequence from its recent acceptance
+    # (only helps the proposers that pay per draft: "draft")
+    spec_adaptive_gamma: bool = False
+    spec_lookahead_span: int = 8          # "lookahead": indexed tokens per commit
     draft_model: str | None = None        # spec_method="draft": small model
     draft_gpu_memory_utilization: float = 0.95   # draft pool sizing
     draft_w4: str | None = None          # packed W4 dir for the draft model

@@ -1,6 +1,6 @@
 # qserve-lab 架构与项目主线（唯一入口）
 
-> 生成于 2026-09-18。本文是项目的**唯一权威入口**：架构分层、M0→M9 演进主线、
+> 生成于 2026-09-18。本文是项目的**唯一权威入口**：架构分层、M0→M10 演进主线、
 > 当前最终状态的数字与结论。所有数字取自 `results/` 原始文件与 `notes/` 里程碑笔记，
 > 与代码现状交叉核对过。旧设计文档已移入 `docs/archive/`（结论以本文为准）。
 
@@ -21,7 +21,7 @@
 | KV cache | KV4 不对称量化（K 静态 per-channel + SmoothAttention / V 动态 per-token g64） | KIVI / QServe / vLLM FP8 |
 | attention | Triton 量化 paged kernel + flash-attn prefill + 手写 CUDA GEMV | vLLM / Marlin |
 | runtime | paged KV 池 + 连续批 + CUDA Graph + 前缀缓存 | nano-vllm → vLLM V1 |
-| 投机推理 | n-gram（lookup）+ chained draft model，greedy 无损验证 | vLLM V1 / TGI |
+| 投机推理 | n-gram / lookahead（查表）+ chained draft model；接受律 greedy argmax 前缀 + 温度 Leviathan 概率比（两者都无损） | vLLM V1 / TGI / Leviathan et al. |
 
 - **方法论**（贯穿全项目）：手写 → 对比官方 → 记笔记；每个里程碑有 notes 文件，
   **证伪的实验和成功的同等保留**；正确性测试必须有"零容差对拍物"。
@@ -66,19 +66,22 @@
 6. **bs=1 时 kernel 数是税不是字节**：W4 draft 步时不改（2241 kernel/步），
    融合（torch.compile）才是正解，4.53→2.59ms。
 7. **批处理下单条输出漂移不是缺陷**：cuBLAS 换 tiling，HF 同样漂移——对比必须同批口径。
+8. **投机一旦服务温度采样，正确性判据就从 token 变成分布**：概率比接受 +
+   `norm(max(0,q-p))` 重采样使输出与目标模型同分布（N=20000、T=0.9 时 TV<0.06，
+   同代码对照组 q≠p 的 TV>0.3 证明该检验有功效）；greedy 是它 p=one-hot 的退化情形。
 
 ---
 
 ## 3. 架构（当前真实代码）
 
 ```
-L4  qslab/api/          LLM 门面 + CLI —— ⚠ 仍指向旧引擎 qslab/engine
+L4  qslab/api/          LLM 门面 + CLI —— M10 起包的是新 runtime（llm_engine.LLMEngine）
 L3  qslab/runtime/      新 runtime（M8 起，主引擎）:
                           llm_engine.py   LLMEngine（add_request/step 连续批循环）
-                          scheduler.py    调度（prefill/decode/verify 分支 + 投机提交）
+                          scheduler.py    调度（prefill/decode/verify 分支 + 投机提交 + 自适应 γ）
                           model_runner.py prepare_prefill/decode/verify + CUDA Graph 捕获
                           draft.py        DraftProposer（chained：第二个完整 runtime）
-                          ngram.py        NGramProposer（CPU 查表）
+                          ngram.py        NGramProposer / LookaheadProposer（CPU 查表）
                           block_manager.py 分页块管理 + 前缀哈希缓存
                           attention.py    prefill(flash-attn+前缀物化) / decode(Triton paged)
                           paged_decode.py int4 池 Triton kernel（decode/verify/materialize）
@@ -95,16 +98,17 @@ adapters/               唯一可 import transformers 的地方
 
 **两代引擎并存**（当前最重要的结构事实）：
 
-| | 旧引擎 `qslab/engine`（M0-M7） | 新 runtime `qslab/runtime`（M8-M9，主线） |
+| | 旧引擎 `qslab/engine`（M0-M7） | 新 runtime `qslab/runtime`（M8-M10，主线） |
 |---|---|---|
 | 形态 | 单请求 decode 循环，transformers 前向 | nano-vllm 骨架：paged KV + 连续批 + CUDA Graph |
 | KV | KVCacheStrategy（dense fp16/kv8/kv4 + kv4.paged） | int4 池（K 静态 channel / V 动态 group） |
-| 投机 | SpeculationMode：chained/lookahead/dynamic | ngram + draft（proposer 接口统一） |
-| 入口 | `qslab/api/llm.py`（LLM 门面/CLI 挂这里） | `qslab/runtime.llm_engine.LLMEngine` 直接用 |
+| 投机 | SpeculationMode：chained/lookahead/dynamic | ngram / lookahead / draft（proposer 接口统一）+ 自适应 γ |
+| 入口 | `qslab/engine/QslabEngine`（bench/对拍直用） | `qslab/api/llm.py`（LLM 门面 + CLI），或直接 `runtime.LLMEngine` |
 | 状态 | **冻结**，oracle 对拍参照 + spec 三模式代码 | 主线，全部最终数字出自这里 |
 
 规则不变：每层只 import 直接下层；量化决策在 L1（backend），模型不感知 kernel。
-遗留：L4 门面未接到新 runtime（bench 与测试直接用 `runtime.LLMEngine`）。
+门面即新 runtime 的对外入口（M10 起）；bench 与部分测试仍直接构造
+`runtime.LLMEngine`，为的是拿住 step 级循环与显存配比。
 
 **一次投机 decode step 的数据流**（新 runtime）：
 
@@ -115,7 +119,8 @@ LLMEngine.step()
   ├─ ModelRunner.run_verify(): M=γ+1 行一次前向（(bs,M) CUDA Graph 族）
   │    └─ attention decode 分支: Triton kv4_paged_decode_kernel(M)
   │         读取上界 = L+m —— 因果性=槽位下界，draft KV 天然被排除
-  └─ Scheduler.postprocess_verify(): greedy 接受（最长 argmax 前缀 + bonus）→ 提交 → trim
+  └─ Scheduler.postprocess_verify(): 逐行接受（greedy=最长 argmax 前缀 / 温度=概率比
+       + 重采样）→ 提交 → trim；接受数写进 spec_stats，自适应 γ 在这里被喂窗口
 ```
 
 ---
@@ -242,24 +247,80 @@ LLMEngine.step()
 - 投机序列补 hash_blocks（投机提交也贡献缓存条目；哈希边界不含 bonus 位，拒绝槽垃圾不入缓存）。
 - **一句话：一次物化修复两个 bug；"先复现再修"的铁律再次兑现。**
 
+### M10 — 功能收尾（门面 / 温度投机 / lookahead / 动态 γ）
+
+M9 之后主线够快但不够"全"：L4 门面还挂在旧引擎上、温度>0 的序列投机时静默退化成
+普通 decode、旧引擎的 lookahead/dynamic 两模式未迁移、8B+draft 只有 bench 没有测试。
+本里程碑收掉全部功能遗留（**不产新性能数字**，产的是可达性与正确性）。
+
+**① L4 门面接到 runtime**
+- `api/llm.py`：`LLM(model, w4=, smooth_kv=, spec=, spec_gamma=, draft=, **Config)` 包
+  `LLMEngine`；`generate/generate_batch` 返回 `{text, token_ids, stats}`；
+  `kv_memory_bytes()` / `weight_memory_bytes()` 把 M8 的显存账直接摊到用户面前。
+- 门面 `SamplingParams` 默认 `temperature=GREEDY=1e-6`：runtime 没有 greedy 分支，
+  logits 除以 1e-6 让 softmax 成 argmax one-hot——沿用全部 runtime 测试的口径，
+  而不是在门面里另造一条通路。温度 ≤0 也归一到 1e-6（0 不是"关闭采样"的暗号）。
+- `cli.py` 重写为 runtime 词表（--w4/--smooth-kv/--spec/--draft/--stats-only）；
+  `--device` 在 import qslab **之前**翻成 `CUDA_VISIBLE_DEVICES`（runtime 绑第一张可见卡）。
+  旧引擎专属旋钮（kv_mode/kv_plan）刻意不暴露。
+- 实跑冒烟：greedy+ngram、T=0.8+lookahead 两条命令各 16 token，输出连贯、stats 正常。
+
+**② 温度投机：概率比接受律（Leviathan）**
+- `ModelRunner.rejection_verify`：按 `min(1, q(x)/p(x))` 接受，拒绝后从
+  `norm(max(0, q-p))` 重采样。greedy 行仍走原 argmax 最长前缀路（4-bit 近并列翻转是
+  混沌，M8 口径），所以既有的 15 个 spec/draft e2e 测试一字未改照常绿。
+- proposer 接口新增 `propose_probs`：`[bs·(γ+1), V]` 的**float32** 提案分布矩阵，行号与
+  verify 批的展平顺序一一对应。用 float32 不是省心的缘故：低概率提案在 fp16 下溢成 0，
+  而 p=0 会把"该拒的"变成"必受"。
+- ⚠ **对齐陷阱**：draft 首次 prefill 吐出的那个 token 本身就是提案 0，所以它的分布必须
+  跟着 prefill 一起捕获（走 `_prefill_capture`，`runner.run()` 那条路把分布丢了）。
+  错了不报错——接受率照样好看，只是接受的是错位的分布。
+- one-hot（查表类提案）与概率比是**同一条规则**：p 为 δ 函数时 `min(1,q/p)` 退化成
+  "q 命中提案即受"，用 `scatter_` 置零 x 列实现，无需分支。
+- 证据：`tests/test_spec_acceptance.py` — V=64、N=20000、T=0.9 下输出经验分布与目标
+  分布 TV<0.06；同代码对照组（q≠p）TV>0.3，证明这条检验真的有功效。
+
+**③ lookahead + 动态 γ 迁移**
+- `runtime/ngram.py::LookaheadProposer`：逐序列持久索引 + 链式延伸（在上一步提案的
+  延续里继续找）+ **首次出现优先**（n-gram 是最后出现优先）——同一 prompt 两种查表
+  策略给出不同提案，这是设计差异不是 bug。
+- `Scheduler._adapt_gamma`：WINDOW=3 滑动均值，≥γ-0.1 回升、≤1.0 折半、中间保持（滞回
+  防抖），钳在 `[1, spec_gamma]`。**只裁提案条数、不重建 verify 图族**：M=γ+1 已烤进
+  `graphs_verify`，所以动态上限就是配置上限。
+- 只对"按条付费"的 proposer 有意义：ngram/lookahead 提案是 CPU 查表，多提不花钱，
+  所以开关对它们不生效（有测试锁住这条）。
+
+**④ 8B+draft 测试固化**
+- 一张 24GB 卡上两个完整 runtime、两套 int4 池：target `gpu_memory_utilization=0.62`、
+  draft `0.9`、`max_num_seqs=4`（比单模型用例的 0.82 低，正是共卡的代价）。
+  断言结构：步数、提交数、`spec_stats` 自洽、平均 ≥2.0 tok/步——不比 token。实跑通过。
+
 ### 测试现状（locks）
 
-非 e2e 32 + e2e 27（含 spec 11、prefix 4、draft 4）+ 8B 2，全绿。
-断言口径：**不逐 token 断言量化输出**（混沌），断言数学结构（接受机制/步数/确定性/
-首位 token/前缀稳定性）。pytest: `pytest tests/ -m "not e2e"` 快门 / 全量 ~2min。
+非 e2e 43 + e2e 38（含 8B 3、门面 6、投机接受律 7）= **81 全绿**（2026-09-18 全量实跑）。
+相比 M9（61）净增 20：接受律/自适应 γ 7 + lookahead 查表 4（快门档）、门面 6、
+spec runtime 温度路径 2、8B+draft 1。
+断言口径：**不逐 token 断言量化输出**（混沌），断言数学结构（接受机制/分布/步数/确定性/
+首位 token/前缀稳定性）。pytest: `pytest tests/ -m "not e2e"` 快门（秒级）/
+全量单卡串行 **3min24s**（81 只，2026-09-18 实测）。
 
 ---
 
 ## 5. 已知限制与下一步
 
-1. **L4 门面未接新 runtime**：`api/llm.py` 仍指旧引擎；新引擎无 LLM/CLI 包装。
-2. **温度采样投机未做**：仅 greedy 接受律；温度>1e-3 的序列投机时静默退化普通 decode
-   （padding 中立保证正确，但不加速）。Leviathan 概率比接受律是正解。
-3. **动态 γ 未做**：最优 γ 强依赖负载（自然 2 / 复读 8），按接受率自适应是明确方向
-   （旧引擎 M6 dynamic 有先例）。
-4. **旧投机栈冻结**：`qslab/engine/spec/`（lookahead/dynamic 模式）未迁移未删除。
-5. **8B+draft 的 e2e 测试未固化**（有 bench 数据无测试）。
-6. **128K YaRN demo 未跑**（M4 起遗留）。
+M10 收掉了原 1-5 号功能遗留（门面 / 温度投机 / 动态 γ / lookahead 迁移 / 8B+draft 测试）。
+剩下的是"没测过的"和"没做的"：
+
+1. **温度投机有正确性证据、无吞吐证据**：概率比路径每步多一份 `[bs·(γ+1), V]`
+   float32 提案分布 + 一次 softmax，加速比从未实测（见 TODO 4）。
+2. **动态 γ 的阈值仍是旧引擎 M6 的先验**，新 runtime 上没扫过参；且 γ_max 锁死在
+   `spec_gamma`——想越到更大窗口就得为新 M 再录一族 verify 图（见 TODO 5）。
+3. **`w4.auto` 每层驻留两份 int4**：`W4Linear` 的 v1 打包缓冲 + Marlin repack，
+   各 ~0.26× fp16，合计 **0.52× fp16**（2048×2048 层实测 4,325,376 vs 8,388,608 字节）。
+   repack 完成后 v1 缓冲本可释放，M9 把 Marlin 转正时没做这一步。
+4. **128K YaRN demo 未跑**（M4 起遗留）。
+5. **旧 `qslab/engine/spec/` 仍在库**：lookahead/dynamic 的逻辑 M10 已迁进 runtime，
+   旧包留作冻结 oracle 参照，等旧引擎整体归档时一并处置。
 
 证据链与复现：见 `benchmarks/`（脚本）与 `results/`（原始文件）；
 分类导读见 `benchmarks/README.md`（若此文件存在）。

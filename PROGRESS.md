@@ -183,3 +183,34 @@ R0-R6 全部完成。仓库从"按里程碑堆叠的研究代码"变为五层分
 - [x] benchmarks/ 按主题 8 分类 + 每类证据链 README + benchmarks/README.md 总索引；
       脚本 sys.path 修正，import 实测通过（5be9b7b）
 - [x] TODO.md：3 项证据链缺环 + 7 项功能遗留
+
+### M10：功能收尾（2026-09-18 完成）
+
+- [x] **L4 门面接到新 runtime**：`api/llm.py` 的 `LLM` 改包 `LLMEngine`
+      （w4/smooth_kv/spec/draft + Config 关键字透传），`generate` 返回
+      text/token_ids/stats，`kv_memory_bytes`/`weight_memory_bytes` 直供显存账；
+      `api/cli.py` 重写为 runtime 词表（`--device` 在 import qslab 前翻成
+      CUDA_VISIBLE_DEVICES，因为 runtime 绑第一张可见卡）；CLI 两条命令实跑冒烟通过
+- [x] **温度采样投机 = Leviathan 概率比接受**：`ModelRunner.rejection_verify` 按
+      min(1, q/p) 接受、拒绝后从 `norm(max(0,q-p))` 重采样；proposer 接口新增
+      `propose_probs`（[bs·(γ+1), V] float32 提案分布）。greedy 行仍走 argmax 最长前缀，
+      所以既有 15 个 spec/draft e2e 测试一字未改照常绿
+- [x] **lookahead 迁移**：`runtime/ngram.py::LookaheadProposer`（逐序列持久索引 +
+      链式延伸 + 首次出现优先，对照 n-gram 的最后出现优先）；
+      **动态 γ**：`Scheduler._adapt_gamma`（WINDOW=3、均值 ≤1.0 折半 / ≥γ-0.1 回升、
+      钳在 [1, spec_gamma]；只裁提案条数，不重建 M=γ+1 的 verify 图族）
+- [x] **8B+draft e2e 固化**：`test_8b_acceptance.py::test_8b_draft_spec_acceptance`
+      （一卡两完整 runtime 两 int4 池，util 0.62/0.9，断言步数/提交/spec_stats 自洽）
+- [x] 新增测试 20 只（接受律 7 含 TV<0.06 无偏性 + 功效对照组、门面 6、lookahead 4、
+      spec runtime 温度路径 2、8B 1）→ **非 e2e 43 + e2e 38 = 81 全绿，单卡串行 3min24s**
+- ⚠ 两个"错了也不会报错"的坑（都是踩出来的）：
+  ① draft 首次 prefill 吐出的 token 本身就是提案 0，其分布必须随 prefill 一起捕获
+      （新增 `_prefill_capture`），否则整窗错位一格——接受率照样好看，接受的是错的分布；
+  ② 提案分布必须 float32：fp16 下低概率 p(x) 下溢成 0，会把"该拒的"变成"必受"
+- ⚠ 复核 TODO：原第 3 项（"32K NIAH 无独立 json 底稿"）**不成立**——
+      `results/m2_niah.json` 本身就是 ctx=32768 的落盘（fp16/kv4 recall 均 1.0，
+      3 深度 ×3 次），产出脚本在库；证据链缺环由 3 项减为 2 项
+- 新缺环改记：温度投机的**吞吐**未测、动态 γ 阈值未调参、`w4.auto` 每层双份 int4
+      （repack 后 v1 缓冲未释放）——见 ARCHITECTURE §5 与 TODO 4/5
+- 说明：M10 不产性能数字（无新 bench），故未建 notes/M10；教训与结论落在本文与
+      ARCHITECTURE §4 M10

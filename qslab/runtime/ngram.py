@@ -45,3 +45,75 @@ class NGramProposer:
 
     def propose_batch(self, seqs) -> list[list[int]]:
         return [self.propose(list(s.token_ids)) for s in seqs]
+
+
+class LookaheadProposer(NGramProposer):
+    """Self-speculation with a persistent index and chain extension (M6 mode).
+
+    Migrated from the frozen ``qslab/engine/spec/modes.py`` LookaheadMode, but
+    only the part of it that actually does something:
+
+    * **Chain extension** — after a key hit, the proposal keeps walking the
+      index with the fixed n-window instead of stopping at the end of the
+      matched span. A single hit's contiguous followers are capped by how far
+      they run before the sequence ends, which bites exactly at the large γ
+      where speculation pays (M9 measured γ=8 optimal on repetition); chaining
+      bridges non-contiguous repeats and is the whole reason to prefer this
+      proposer over the plain lookup.
+    * **First occurrence wins**, matching M6 (the plain lookup above takes the
+      most recent hit — a different bet, kept distinct rather than merged).
+
+    NOT ported: M6's longest-key-first ladder. It tried keys of length γ down
+    to 1, but its index only ever holds n-length keys, so every rung except
+    ``take == n`` was unreachable — a no-op the old tests never noticed.
+    """
+
+    def __init__(self, ngram_size: int, num_drafts: int, span: int = 8):
+        super().__init__(ngram_size, num_drafts)
+        self.span = span
+        # per sequence: a shared index would let one request's proposal come
+        # from another request's text, making output depend on batch composition
+        self._index: dict[int, dict[tuple[int, ...], list[int]]] = {}
+        self._indexed: dict[int, int] = {}       # seq_id -> tokens already indexed
+
+    def drop_seqs(self, seq_ids):
+        """Called by the engine when a sequence finishes."""
+        for sid in seq_ids:
+            self._index.pop(sid, None)
+            self._indexed.pop(sid, None)
+
+    def propose(self, token_ids: list[int], seq_id: int | None = None) -> list[int]:
+        L, n, g = len(token_ids), self.n, self.gamma
+        if L <= n:
+            return []
+        index = self._index_upto(token_ids, seq_id)
+        key = tuple(int(t) for t in token_ids[L - n:L])
+        cands = index.get(key)
+        if not cands:
+            return []
+        proposal = [int(t) for t in cands][:g]
+        # chain: keep following the window through the index to fill the window
+        seq = list(token_ids) + proposal
+        while len(proposal) < g:
+            nxt = index.get(tuple(seq[-n:]))
+            if not nxt:
+                break
+            proposal.append(int(nxt[0]))
+            seq.append(int(nxt[0]))
+        return proposal
+
+    def _index_upto(self, token_ids: list[int], seq_id: int | None):
+        """Index every position once; the tail walk only ever needs new tokens."""
+        n = self.n
+        index = self._index.setdefault(seq_id, {})
+        start = self._indexed.get(seq_id, 0)
+        for i in range(start, len(token_ids) - n):
+            key = tuple(int(t) for t in token_ids[i:i + n])
+            if key not in index:
+                index[key] = [int(t) for t in
+                              token_ids[i + n:i + n + max(4, self.span)]]
+        self._indexed[seq_id] = len(token_ids) - n
+        return index
+
+    def propose_batch(self, seqs) -> list[list[int]]:
+        return [self.propose(list(s.token_ids), s.seq_id) for s in seqs]

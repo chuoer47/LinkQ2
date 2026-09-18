@@ -28,10 +28,11 @@ NATURAL_PROMPT = ("The history of computing spans several centuries, from early 
                   "the abacus assisted calculation, and the")
 
 
-def _eng():
+def _eng(adaptive=False):
     return LLMEngine(model=MODEL, max_model_len=4096, max_num_seqs=4,
                      enforce_eager=False, gpu_memory_utilization=0.5,
                      smooth_kv=CALIB, spec_method="draft", spec_num_drafts=4,
+                     spec_adaptive_gamma=adaptive,
                      draft_model=DRAFT, draft_gpu_memory_utilization=0.95)
 
 
@@ -123,3 +124,49 @@ def test_draft_multiple_sequences():
         assert (committed / steps) > 1.0
     finally:
         _release(eng)
+
+
+def test_adaptive_gamma_shrinks_when_proposals_keep_failing():
+    """The migrated DynamicMode policy, wired through the real engine.
+
+    A stubbed proposer keeps the assertion about the window rather than about
+    the draft model's mood: token 0 is one this model never emits (the tests
+    above assert as much), so every round must land nothing and the window must
+    halve — while generation itself stays correct at the shorter window.
+    """
+    eng = _eng(adaptive=True)
+    try:
+        assert eng.scheduler.adaptive_gamma, "adaptation is gated on the drafting proposer"
+        assert eng.scheduler.proposal_gamma == eng.scheduler.gamma
+        gamma = eng.scheduler.gamma
+        eng.scheduler.proposer.propose_batch = lambda seqs: [[0] * gamma
+                                                            for _ in seqs]
+        out = eng.generate([NATURAL_PROMPT], SamplingParams(temperature=1e-6,
+                                                            max_tokens=24,
+                                                            ignore_eos=True),
+                           use_tqdm=False)
+        ids = out[0]["token_ids"]
+        assert len(ids) == 24
+        assert 0 not in ids, "a rejected proposal was committed"
+        assert eng.scheduler.proposal_gamma == gamma // 2, \
+            f"window did not shrink: {eng.scheduler.proposal_gamma}"
+        st = eng.scheduler.spec_stats
+        # 1 token from the prefill step, then one bonus per verify step
+        assert st["accepted"] == 0 and st["steps"] == 23, st
+        # the shorter window is still speculation, not a fallback to decode
+        assert eng.scheduler.proposal_gamma < gamma
+    finally:
+        _release(eng)
+
+
+def test_adaptive_gamma_is_off_for_the_free_proposers():
+    """A lookup costs nothing per draft, so halving its window would only drop
+    accepted tokens — the flag is deliberately inert outside draft mode."""
+    from qslab.runtime.config import Config
+    cfg = Config(MODEL, spec_method="ngram", spec_adaptive_gamma=True,
+                 smooth_kv=CALIB)
+    cfg.num_kvcache_blocks = 8
+    from qslab.runtime.scheduler import Scheduler
+    from qslab.runtime.sequence import Sequence
+    Sequence.block_size = cfg.kvcache_block_size
+    assert Scheduler(cfg).adaptive_gamma is False

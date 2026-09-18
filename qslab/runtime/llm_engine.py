@@ -68,11 +68,11 @@ class LLMEngine:
             token_ids = self.model_runner.call("run", seqs, is_prefill)
             self.scheduler.postprocess(seqs, token_ids, is_prefill)
         elif any(seq.spec_verify for seq in seqs):
-            # speculative verify step: one M-row forward, greedy acceptance
-            # (design-m9). Sequences without drafts ride along padded — their
-            # step is semantically an ordinary decode.
-            self._propose(seqs)
-            token_ids = self.model_runner.call("run_verify", seqs)
+            # speculative verify step: one M-row forward, ratio acceptance
+            # (design-m9 + Leviathan). Sequences without drafts ride along
+            # padded — their step is semantically an ordinary decode.
+            draft_probs = self._propose(seqs)
+            token_ids = self.model_runner.call("run_verify", seqs, draft_probs)
             num_tokens = -self.scheduler.postprocess_verify(seqs, token_ids)
         else:
             num_tokens = -len(seqs)
@@ -86,24 +86,27 @@ class LLMEngine:
         return outputs, num_tokens
 
     def _propose(self, seqs):
-        """Fill spec_drafts for the greedy sequences of a verify batch.
+        """Fill spec_drafts for the whole verify batch.
 
-        Only greedy: the argmax-equality acceptance rule is a faithful accept
-        only for greedy (temperature sampling needs the ratio rule,
-        design-m9 §7). Non-greedy sequences keep [] and degrade to a plain
-        decode step via padding neutrality."""
+        Every sequence is proposed for, at its own temperature: the acceptance
+        rule is the Leviathan ratio test, which is lossless for sampled
+        proposals as well as greedy ones (a greedy or lookup proposal is just
+        the one-hot case where it degenerates to the argmax check).
+        """
         proposer = self.scheduler.proposer
         if proposer is None:
             return
-        greedy = [s for s in seqs if s.temperature <= 1e-3]
-        if not greedy:
-            return
-        drafts = proposer.propose_batch(greedy)
+        drafts = proposer.propose_batch(seqs)
         gamma = self.scheduler.gamma
+        # adaptive windows only shorten the proposal list — M stays
+        # spec_num_drafts + 1 because the captured CUDA-graph family is keyed
+        # on it, and the unused rows are free the way padded rows always were
+        cap = min(gamma, self.scheduler.proposal_gamma)
         max_len = self.scheduler.max_model_len
-        for seq, d in zip(greedy, drafts):
-            geff = min(gamma, max_len - len(seq))
+        for seq, d in zip(seqs, drafts):
+            geff = min(cap, max_len - len(seq))
             seq.spec_drafts = [t for t in d if t is not None][:max(0, geff)]
+        return getattr(proposer, "propose_probs", None)
 
     def is_finished(self):
         return self.scheduler.is_finished()

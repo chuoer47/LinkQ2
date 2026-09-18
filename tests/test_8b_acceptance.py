@@ -24,6 +24,10 @@ MAX_TOKENS = 24
 
 
 def _release(eng):
+    prop = getattr(eng.scheduler, "proposer", None)
+    if prop is not None and hasattr(prop, "exit"):
+        prop.exit()
+    eng.scheduler.proposer = None
     for layer in eng.model_runner.model.model.layers:
         a = layer.self_attn.attn
         a.k_cache = a.v_cache = None
@@ -79,5 +83,37 @@ def test_8b_speculative_verify():
         assert committed == 32 - 1
         avg = committed / steps
         assert avg > 2.0, f"avg committed/step = {avg:.2f}"
+    finally:
+        _release(eng)
+
+
+def test_8b_draft_spec_acceptance():
+    """The main-line combination no test covered (TODO M10): 8B W4+KV4 driven by
+    a drafting model — two runtimes and two int4 pools on one 24 GB card, which
+    is why the memory fractions differ from the tests above. Acceptance is
+    asserted structurally, exactly as the n-gram case."""
+    eng = LLMEngine(model=MODEL, max_model_len=4096, max_num_seqs=4,
+                    enforce_eager=False, gpu_memory_utilization=0.62,
+                    smooth_kv=CALIB, w4=W4,
+                    spec_method="draft", spec_num_drafts=4,
+                    draft_model="models/Qwen3-0.6B",
+                    draft_gpu_memory_utilization=0.9)
+    try:
+        prompt = (" The capital of France is Paris. The capital of Germany is Berlin. "
+                  "The capital of Italy is Rome. The capital of France is")
+        committed = steps = 0
+        eng.add_request(prompt, SamplingParams(temperature=1e-6, max_tokens=32,
+                                               ignore_eos=True))
+        while not eng.is_finished():
+            _, num = eng.step()
+            if num < 0:
+                committed += -num
+                steps += 1
+        assert steps < 31, f"steps={steps}: no multi-token acceptance"
+        assert committed == 32 - 1        # the prefill step owns the first one
+        avg = committed / steps
+        assert avg > 2.0, f"avg committed/step = {avg:.2f}"
+        st = eng.scheduler.spec_stats
+        assert st["steps"] == steps and st["committed"] == committed
     finally:
         _release(eng)

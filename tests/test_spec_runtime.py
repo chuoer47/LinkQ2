@@ -32,10 +32,11 @@ PLAIN_PROMPT = " Water freezes at"
 
 def _eng(**kw):
     spec = kw.pop("spec", True)
+    method = kw.pop("method", "ngram")
     eng = LLMEngine(model=MODEL, max_model_len=4096, max_num_seqs=4,
                     enforce_eager=kw.pop("eager", True),
                     gpu_memory_utilization=0.5, smooth_kv=CALIB,
-                    **({"spec_method": "ngram", "spec_num_drafts": 4} if spec else {}))
+                    **({"spec_method": method, "spec_num_drafts": 4} if spec else {}))
     return eng
 
 
@@ -51,8 +52,8 @@ def _release(eng):
     torch.cuda.empty_cache()
 
 
-def _gen(eng, prompt, n=48):
-    out = eng.generate([prompt], SamplingParams(temperature=1e-6, max_tokens=n),
+def _gen(eng, prompt, n=48, temperature=1e-6):
+    out = eng.generate([prompt], SamplingParams(temperature=temperature, max_tokens=n),
                        use_tqdm=False)
     return out[0]["token_ids"]
 
@@ -211,5 +212,53 @@ def test_spec_with_cuda_graph():
         # replay twice is deterministic
         again = _gen(eng, COPY_PROMPT, n=32)
         assert got == again
+    finally:
+        _release(eng)
+
+
+def test_lookahead_proposer_end_to_end():
+    """M10: the migrated M6 self-proposal mode rides the same verify path.
+
+    It is a different proposer (persistent index, chain extension, first
+    occurrence wins) behind identical acceptance machinery, so the assertions
+    are the machinery's: full length, an exact prefill token, and fewer steps
+    than tokens.
+    """
+    eng = _eng(method="lookahead")
+    try:
+        assert eng.scheduler.proposer.__class__.__name__ == "LookaheadProposer"
+        with _Counting(eng) as c:
+            got = _gen(eng, COPY_PROMPT, n=48)
+        assert len(got) == 48
+        assert got[0] == 12095
+        assert 0 not in got
+        assert c.steps < 48, f"steps = {c.steps}, no speedup"
+        assert c.committed == len(got) - 1
+        # the scheduler's own counters are what the facade reports
+        st = eng.scheduler.spec_stats
+        assert st["steps"] == c.steps and st["committed"] == c.committed
+        assert 0.0 <= st["acceptance_rate"] <= 1.0
+    finally:
+        _release(eng)
+
+
+def test_temperature_verify_accepts_ratio_and_replays():
+    """Sampled decoding through the speculative path (design-m9 §7 closed).
+
+    The rule promises the target's *distribution*, never its argmax, so this
+    asserts the machinery and the replay stability a seeded run can give — not
+    equality with the greedy tokens above.
+    """
+    eng = _eng()
+    try:
+        torch.manual_seed(7)
+        with _Counting(eng) as c:
+            a = _gen(eng, COPY_PROMPT, n=48, temperature=0.8)
+        assert len(a) == 48
+        assert c.committed == len(a) - 1
+        assert c.steps < 48, f"steps = {c.steps}: ratio path never committed twice"
+        assert len(set(a)) > 8, "sampled output collapsed into repetition"
+        torch.manual_seed(7)
+        assert _gen(eng, COPY_PROMPT, n=48, temperature=0.8) == a
     finally:
         _release(eng)
