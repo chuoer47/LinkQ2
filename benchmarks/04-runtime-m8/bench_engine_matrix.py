@@ -7,7 +7,7 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 MODE = sys.argv[1] if len(sys.argv) > 1 else "w4kv4"
 DO_PPL = "--ppl" in sys.argv
