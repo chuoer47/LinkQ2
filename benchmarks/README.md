@@ -39,6 +39,9 @@ export CUDAHOSTCXX=$CONDA_PREFIX/bin/x86_64-conda-linux-gnu-g++
 | `06-spec-draft/` | draft 投机 + 概率比接受的温度代价 + 动态 γ 扫参 | M9/M10 | bench_spec_draft, bench_spec_temperature, bench_spec_adaptive_tune |
 | `07-prefix-cache/` | 前缀缓存 TTFT | M9 | bench_prefix_cache |
 | `08-long-context/` | YaRN 分档 NIAH（32K/64K/128K 速度 + 召回 + 失败形态） | M11 | bench_niah_yarn |
+| `09-batch-throughput/` | **batch>1 吞吐扫描**（并发轴首次定价）+ KV 池计费实测 | M12 | bench_batch |
+| `10-vllm-compare/` | 官方 vLLM 0.11 同 prompt 墙钟对照（fp16↔fp16） | M12 | bench_vllm |
+| `11-service-surface/` | OpenAI 兼容服务面冒烟（验收脚本，不是吞吐实验） | M12 | smoke, smoke_concurrency |
 | `archive-legacy/` | 旧引擎 spec bench（M3/M6 口径） | M3/M6 | bench_spec, bench_spec_modes |
 
 ## 关键结果速查（→ 底稿文件）
@@ -60,3 +63,11 @@ export CUDAHOSTCXX=$CONDA_PREFIX/bin/x86_64-conda-linux-gnu-g++
 | W4 kernel 三方 | M≥8 Marlin 碾压 | results/m5_kernel_bench.json |
 | 长上下文速度曲线（8B W4A16KV4 + YaRN） | decode 13.3 / 7.1 / 3.7 tok/s @32K/64K/128K；冷 prefill 6.7 / 17.8 / 53.2 s；peak 13.38 GiB | results/m11_yarn_niah.txt |
 | 分档 NIAH 召回 | 6/8、8/8、7/8、**3/8**（128K）。**这是严格匹配下界，不是检索成功率**：128K 的漏 4/5 是"数字前缀全对、尾部丢"⇒ 塌点在转写；YaRN 对召回的贡献**未证**（无 128K 基线） | 同上 + `benchmarks/08-long-context/README.md` |
+| 批量加速（1.7B fp16 权重+KV4，关投机） | bs1→32 **24.43×**（3572.8 tok/s 解码窗口 / 3516.0 墙钟）；每请求 146→112 tok/s | results/m12_batch_1.7b.txt |
+| ↳ 8B W4A16KV4 同轴 | bs1→16 **12.99×**（1271.9 tok/s）；每请求 98→80 tok/s | results/m12_batch_8b.txt |
+| ↳ **投机在高并发翻负**（本轮最有价值的负性结论） | 1.7B ngram/off：bs1 1.90× → bs8 1.10× → bs16 **0.90×** → bs32 **0.77×**；8B 到 bs16 仍有 1.50× | results/m12_batch_1.7b_spec.txt + m12_batch_8b_spec.txt |
+| ↳ 口径边界：扫描 bs=1 的投机读数 ≠ 出厂读数 | 1.7B 278.1 vs 自检 441.3（−37%）、8B 313.5 vs 310.6（+0.9%）；除首 token 外 prompt 相同 ⇒ 机制**未证**，两表不可互比 | benchmarks/09-batch-throughput/README.md |
+| 官方 vLLM 对照（1.7B fp16↔fp16，同 token ids、墙钟口径） | 本引擎 = vLLM 的 **0.67–0.73×**，比例不随并发变；批量曲线重合（24.43× vs 23.91×） | results/m12_vllm_1.7b.txt |
+| ↳ 量化侧的容量收益（同 util=0.5） | KV 池 **135,936 vs 75,808 tokens（1.79×）**；按真实字节 28.9 vs 112 KiB/token = **3.87×**，只兑现到 1.79× 是因为下面那条超订 | 同上 + results/m12_batch_1.7b.txt |
+| KV 池超订（TODO 11 由读代码转成实测） | 计费 vs 实配 = **1.94×**（两个模型都是）；8B 池 431 块 = 55,168 tok = **13 条** 4096-token 序列 = 并发上限 | 四份 results/m12_batch_*.txt 的 `[kvschema]` 行 |
+| 服务面 8 并发（HTTP 面，1.7B fp16+KV4） | 384 tok / 0.444 s = **865 tok/s**，8 条同批完成；与进程内 bs=8 扫描（1015）差 14.8%，**不可整笔记在 HTTP 上** | results/m12_service_smoke.txt |

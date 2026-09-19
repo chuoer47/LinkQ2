@@ -107,11 +107,37 @@
     于是每次底稿都要人工重读一遍答案才敢下结论。需要逐位/编辑距离口径（或至少分开统计
     "前缀对长度"）。本轮**没改脚本**——改了就没有可比的两轮；128K 档 38% 这个数因此是
     严格匹配下界，不是"检索成功率"。
-11. **KV 池按 72 KiB/token 计费，是 int4 载荷的约 2×**（M11 读代码发现，
-    `model_runner.py:123-124` 的 `slot_bytes = 2 * head_dim`）：36 层 × 8 KV 头 × 128 × 0.5 B
-    × 2(K,V) = 36 KiB 就够。多出的一半归属（per-channel scales / 对齐）**未逐字节拆开验证**。
-    后果直接可见：128K + 32 生成要吃 9.0 GiB 池，`UTIL=0.8` 只剩 1.2× 余量、
-    `max_num_seqs=2` 贴着上限 ⇒ 修掉计费口径约等于再翻一倍上下文/并发。**收益未测**。
+11. **KV 池超订**（M11 读代码发现，**M12 已量化**——四份 `results/m12_batch_*.txt` 的
+    `[kvschema]` 行）：`allocate_kv_cache` 按 `slot_bytes = 2 * head_dim`
+    （`model_runner.py:123-124`）计费，而真实缓冲是 kq(int4, head_dim/2 B) +
+    vq(int4, head_dim/2 B) + vs(fp16, 2·head_dim/v_group B) = **132 B/head/layer**
+    （`:139-147`）⇒ 1.7B 计费 56.0 / 实配 28.9 KiB·token⁻¹，8B 计费 72.0 / 实配 37.1，
+    **两个模型都是 1.94× 超订**（原来那句"多出的一半归属未逐字节拆开验证"就此结掉）。
+    后果：8B 的 3.79 GiB 预算里只有约 2.05 GiB 真被分配，池 431 块 = 55,168 tokens，
+    按 `max_model_len=4096` 只容 **13 条**满长序列（M11 那档 128K 把 `max_num_seqs`
+    压到 2 就是这个原因）。修掉计费口径 ≈ 并发/上下文白翻一倍。
+12. **投机与并发抢同一份算力，当前没有联动策略**（M12 新账）：1.7B 上
+    n-gram / 关投机的比值从 bs=1 的 1.90× 单调降到 bs=8 的 1.10×、bs=16 的 **0.90×**、
+    bs=32 的 **0.77×** ⇒ **高并发开投机是净负收益**；8B 在同区间仍为正（bs=16 为 1.50×），
+    说明阈值存在但从未标定。需要一条"按当前 batch 关/降投机"的策略——现在
+    `spec_num_drafts` 与 `max_num_seqs` 互不知情。底稿 `results/m12_batch_1.7b*.txt`。
+13. **1.7B 每序列接受率随并发掉、8B 不掉，机制未证**（M12 新账）：
+    `tok/step ÷ bs` 为 1.7B 2.16 → 1.50 → 1.53 → 1.28 → 1.18 → 1.19，8B 恒在 3.54。
+    `NGramProposer.propose` 只读单条序列的 `token_ids`、无任何跨序列状态（`ngram.py:51`），
+    所以**不是**提议器串味。剩余候选（权重精度 fp16/W4、token 预算 256/192、8B 是否
+    本就吃满 γ+1）**未逐一定责**；要定责需要逐位置接受率（与缺环⑤同一把尺子）。
+14. **服务面断连不取消**（M12 新账，底稿 `results/m12_service_smoke.txt` 已现形）：
+    `head -6` 提前断管 ⇒ 服务端在 `server.py:256` 抛
+    `ClientConnectionResetError: Cannot write to closing transport`。两件事要做：
+    ①流式写出包一层，断连只丢该 Job 的增量、不脏服务端日志；②给 scheduler 加
+    "按 seq_id 摘除"的接口，让断连真的回收算力（现在会继续生成到 token 预算用完）。
+15. **服务面只有 demo 级防护**：无鉴权、`active_requests` 只观测不设闸、无请求超时、
+    无队列上限 ⇒ 打满只会排队 + 抢占，不会拒绝。对外暴露之前必须补。
+16. **vLLM 对照还缺两格**（M12）：① 8B W4A16↔W4A16——vLLM 加载不了自研
+    `qslab_w4_v1` pack，要走 vLLM 侧量化（bitsandbytes / compressed-tensors），这要在
+    共享的 `vllm` env 里装新依赖，**属改环境，先问再做**；② int4 KV 在 vLLM 0.11 没有
+    对应物（它最好到 fp8 KV），所以 KV4 的容量收益只能做成"同 util 下池 135,936 vs
+    75,808 tokens"这种记账式对照，做不了等精度吞吐对照。
 
 ## M10 已完成（2026-09-18，功能遗留全部落地）
 
@@ -191,3 +217,43 @@
       —— 第一轮整张 prefill 表因此作废并重跑；② 答案片段必须宽到看得见数字（≥60 字符）+
       单独抽 `got=`，否则 24 字符套话让所有 miss 长得一样、无法归因。
 - [ ] 新账 10（评分口径）与 11（池计费）见上。
+
+## M12（2026-09-19，并发轴首次定价 + 官方 vLLM 对照 + 最小服务面）
+
+- [x] **补上从未有过的 bs>1 读数**：`benchmarks/09-batch-throughput/bench_batch.py`。
+      仪器先自证：`SELF=1` 用**出厂 prompt + 出厂 token 数**复测 bs=1，偏差 >5% 就
+      `exit(1)`、bs>1 一格都不报——四格 Δ 0.4% / 3.2% / 0.7% / 0.1% 全过。扫描用的
+      prompt 每条前置一个不同随机 token id 打掉前缀缓存（`compute_hash` 链式哈希，
+      首块不同即整条不命中）。读数：1.7B 关投机 bs1→32 **24.43×**（3572.8 tok/s 解码
+      窗口）、8B bs1→16 **12.99×**；**投机在高并发翻负**（1.7B bs16 0.90×、bs32 0.77×）
+      ⇒ 新账 12/13。另记一条口径边界：扫描的 bs=1 投机读数（1.7B 278.1）远低于自检的
+      出厂口径（441.3），除首 token 外 prompt 完全相同 ⇒ 差异只能来自生成序列本身，
+      **机制未证**，所以两张表不可互比。
+- [x] **TODO 11 从"读代码发现"变成实测**：`[kvschema]` 行直接印出计费 vs 实配，两个
+      模型都是 **1.94× 超订**；顺带量出 8B 池 = 431 块 = 55,168 tokens = **13 条**
+      4096-token 序列，这就是当前的并发天花板。
+- [x] **官方 vLLM 同 prompt 对照**：`benchmarks/10-vllm-compare/bench_vllm.py` +
+      `results/m12_vllm_1.7b.txt`（独立 env：vllm 0.11.0 / torch 2.8.0+cu128）。墙钟口径
+      下本引擎 = vLLM 的 **0.67–0.73×**，且比例不随并发变；两条批量加速曲线重合
+      （24.43× vs 23.91×）⇒ 形态上是每步固定开销而非调度缺陷（**未做逐层 profile**）。
+      量化侧的收益是记账式的：同 util 下 KV 池 **1.79×** 容量，按真实字节 **3.87×**。
+      两条环境坑固化进脚本：`VLLM_USE_FLASHINFER_SAMPLER=0`（该 env 无 nvcc，flashinfer
+      的 JIT 采样器在 engine 初始化即炸）；父进程失败会留孤儿 `VLLM::EngineCore` 占 8 GiB，
+      下一次启动以 `Free memory on device (7.11/23.53 GiB)` 失败。
+- [x] **最小服务面**：`qslab/api/server.py`（aiohttp，optional extra `.[serve]`，核心包
+      不引入 web 依赖）+ `tests/test_api_server.py` 7 条 + `benchmarks/11-service-surface/`。
+      设计要点：**一个泵线程独占引擎**（不按请求开线程），批仍然在 scheduler 里成；为此
+      `add_request` 改为返回 `Sequence`（本轮唯一引擎侧改动），泵每步 diff
+      `completion_token_ids` 才能逐 token 流式；`LLM.engine` 属性公开给服务面。
+      读数：8 并发 384 tokens / 0.444 s = **865 tok/s**，8 条同批完成；对照进程内 bs=8
+      扫描（1015 tok/s）差 14.8%——**这 14.8% 不能整笔记在 HTTP 上**（prompt 长度、curl
+      进程启动、util 0.9 vs 0.5、有无 smooth calib 四个混杂都在里面），所以口径只到
+      "同数量级、批确实成了"。
+- [x] **测试先抓出一个真 bug**：`body.get("max_tokens") or DEFAULT` 把 `max_tokens: 0`
+      静默吃成 128 ⇒ 改成显式判 `None`。这条值得单独记：**校验测试抓到的是人眼漏过的
+      静默默认值**，不是"多写几条测试"。
+- [x] 采集底稿的两条流程教训（已写进 `benchmarks/11-service-surface/README.md`）：
+      ① `pkill -f qslab.api.server` 会匹配到发起命令自己的命令行，把 ssh 会话一起打死
+      （第一版底稿因此只剩空头，重做过一次）；收尾必须按记录的 PID 精确 kill。
+      ② 用 `sleep` 撑长的远程命令会掐断 MCP 传输 ⇒ 改成"后台起 + 短命令轮询"。
+- [ ] 新账 12–16（投机-并发联动、接受率机制、断连取消、服务面防护、vLLM 空格子）见上。

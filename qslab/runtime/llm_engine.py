@@ -55,11 +55,18 @@ class LLMEngine:
         runner.call("exit")
         del self.model_runner
 
-    def add_request(self, prompt: str | list[int], sampling_params: SamplingParams):
+    def add_request(self, prompt: str | list[int], sampling_params: SamplingParams) -> Sequence:
+        """Queue one request and hand back its Sequence.
+
+        The return value is what the HTTP service surface (qslab.api.server)
+        watches: step() reports only finished sequences, so token-level
+        streaming needs the live Sequence to diff completion_token_ids.
+        """
         if isinstance(prompt, str):
             prompt = self.tokenizer.encode(prompt)
         seq = Sequence(prompt, sampling_params)
         self.scheduler.add(seq)
+        return seq
 
     def step(self):
         seqs, is_prefill = self.scheduler.schedule()

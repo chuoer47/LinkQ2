@@ -1,8 +1,11 @@
 # PROGRESS.md — qserve-lab 唯一状态源
 
-## 当前阶段：**M11 完成（2026-09-19）** — 引擎主线 W4A16+KV4+投机+前缀缓存+YaRN 长上下文，
-证据链缺环与功能遗留全部清空；剩余三项都是"新账/优化空间"（TODO 9 早停成本通道、
-10 长上下文评分口径、11 KV 池 2× 过计费）。以下按时间顺序保留全过程。
+## 当前阶段：**M12 完成（2026-09-19）** — 并发轴首次定价 + 官方 vLLM 对照 + 最小服务面。
+主线能力（W4A16+KV4+投机+前缀缓存+YaRN）之外，第一次有了 bs>1 的读数，也第一次有了一个
+**承认自己更慢**的业界基线：同卡同 prompt 的 fp16↔fp16 下本引擎 = vLLM 0.11 的 0.67–0.73×，
+而 4-bit 一侧的收益是记账式的（同 util 下 KV 池 1.79×）。TODO 11 从"读代码发现"变成实测
+（1.94× 超订）。新账 12–16：投机-并发无联动、接受率机制未证、断连不取消、服务面无防护、
+vLLM 还缺 8B W4 格子。以下按时间顺序保留全过程。
 
 ### R0 flash-attn 安装
 - [x] flash-attn 2.7.4 (cu124/torch2.5/py3.11 预编译 wheel) 装入 qslab env
@@ -342,3 +345,46 @@ M10 本体不产性能数字，留下三处"口算/口录/从未测"。本轮把
       ⇒ 128K 的 38% 是**下界**不是检索率（TODO ⑩）。
 - 门面侧零改动：`rope_scaling` / `max_model_len` 经 `LLM(**runtime_config)` 直通 `Config`，
       128K 不需要新 API；用法示例在 `benchmarks/08-long-context/README.md` 与根 README。
+
+
+### M12（2026-09-19，并发轴首次定价 + 官方 vLLM 对照 + 最小服务面）
+
+- [x] **`benchmarks/09-batch-throughput/bench_batch.py`**：仓库第一张 bs>1 吞吐表。
+      自检门（出厂 prompt 复测 bs=1，偏差 >5% 不出数）四格 Δ 0.4%/3.2%/0.7%/0.1% 全过。
+      读数：1.7B 关投机 bs1→32 **24.43×**（3572.8 tok/s 解码窗口 / 3516.0 墙钟）、
+      8B W4A16KV4 bs1→16 **12.99×**；每请求吞吐 146→112（1.7B）、98→80（8B）。
+- [x] **负性结论（本轮最值钱的一条）**：n-gram 投机的收益随并发衰减并在 1.7B 上**翻负**
+      —— 投机/关投机 = 1.90×(bs1) → 1.10×(bs8) → **0.90×(bs16)** → **0.77×(bs32)**；
+      8B 到 bs16 仍有 1.50× ⇒ 存在阈值但从未标定，`spec_num_drafts` 与 `max_num_seqs`
+      互不知情（TODO 12）。同时记一条口径边界：扫描 bs=1 的投机读数 278.1 远低于自检
+      出厂口径 441.3，除首 token 外 prompt 相同 ⇒ 机制**未证**，两张表不可互比。
+- [x] **TODO 11 转成实测**：`[kvschema]` 行打印计费（`slot_bytes=2*head_dim`）vs 实配
+      （kq+vq int4 各 head_dim/2 B + vs fp16 = 132 B/head/layer）⇒ **1.94× 超订**，
+      1.7B 与 8B 都是。顺带量出 8B 池 431 块 = 55,168 tokens = **13 条** 4096-token 序列
+      = 当前并发天花板；1.7B 1062 块 = 135,936 tokens。
+- [x] **官方 vLLM 对照**：`benchmarks/10-vllm-compare/bench_vllm.py`（独立 env，
+      vllm 0.11.0 / torch 2.8.0+cu128 / Flash Attention / CUDA graph level 3）+
+      `results/m12_vllm_1.7b.txt`。墙钟口径：**0.67–0.73×**，比例不随并发变；
+      批量曲线重合（24.43× vs 23.91×）⇒ 每步固定开销而非调度缺陷（逐层**未证**）。
+      KV 容量对照：同 util=0.5 下 135,936 vs 75,808 tokens（1.79×），按真实字节 3.87×。
+      三条不可比写进 docstring 与 README：vLLM 无 int4 KV、加载不了 `qslab_w4_v1` pack、
+      该格不含投机。**没有任何逐 token 一致性检查**。
+- [x] **最小服务面 `qslab/api/server.py`**（OpenAI 兼容 4 个端点 + SSE）：
+      **一个泵线程独占引擎**（批仍在 scheduler 里成），为此 `add_request` 返回 `Sequence`
+      （本轮唯一引擎侧改动）+ `LLM.engine` 公开属性。aiohttp 以 optional extra `.[serve]`
+      声明，核心包不引入 web 依赖。`tests/test_api_server.py` 7 条（快档）+
+      `benchmarks/11-service-surface/` 两个冒烟脚本 + 底稿 `results/m12_service_smoke.txt`。
+      读数：8 并发 384 tokens / 0.444 s = **865 tok/s**，8 条同批完成；对照进程内 bs=8
+      扫描 1015 tok/s 差 14.8%，但**不整笔记在 HTTP 上**（prompt 长度、curl 启动、
+      util 0.9 vs 0.5、有无 smooth calib 四个混杂都在里面）。
+- [x] **测试抓到的真 bug**：`body.get("max_tokens") or DEFAULT` 把 `max_tokens: 0`
+      静默吃成 128 ⇒ 显式判 `None`。这条是"校验测试的价值"的样本，不是"多写几条测试"。
+- ⚠ **两条仪器/流程缺陷（都导致重跑）**：① 第一版服务面底稿是空的——
+      `pkill -f qslab.api.server` 匹配到发起命令自己的命令行，把 ssh 会话连同服务一起打死；
+      收尾必须按记录的 PID 精确 kill。② vLLM 的失败父进程会留下孤儿 `VLLM::EngineCore`
+      占 8 GiB，下一次启动以 `Free memory on device (7.11/23.53 GiB)` 失败 ⇒ 重跑前
+      `nvidia-smi --query-compute-apps`，只按 PID 清自己的（0/2 号卡是别人的）。
+      另固化一条环境事实：这个 env 没有 nvcc，vLLM 0.11 的 flashinfer JIT 采样器在
+      engine 初始化就炸 ⇒ 脚本内 `VLLM_USE_FLASHINFER_SAMPLER=0`。
+- [x] 全量测试 **104/104**（63 快档 + 41 e2e）。注意 `pytest.ini:6` 已有 `addopts = -q`，
+      命令行再给 `-q` 会变成 `-qq` 而**把汇总行吞掉**——看"几分之几"时别叠加 `-q`。

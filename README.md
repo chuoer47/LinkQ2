@@ -7,10 +7,10 @@ single consumer GPU (RTX 4090, sm_89). Built as a from-scratch study of **what m
 Everything is measured, not asserted: benchmarks live in `benchmarks/` (organized by
 topic, each with an evidence chain + repro commands), raw result files in `results/`,
 and each milestone's write-up lives in `notes/` (M0–M9) or `docs/ARCHITECTURE.md`
-(M10–M11) — including the experiments that did *not* work.
+(M10–M12) — including the experiments that did *not* work.
 
 **Read this first: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)** — the single entry
-point: layer map, the M0→M11 evolution (motivation → design → numbers → verdict, with
+point: layer map, the M0→M12 evolution (motivation → design → numbers → verdict, with
 falsified hypotheses kept), current best numbers, known limitations, doc map.
 
 ## Headline results (Qwen3-8B, one RTX 4090 D, greedy)
@@ -23,6 +23,8 @@ falsified hypotheses kept), current best numbers, known limitations, doc map.
 | prefix cache hit (3800-tok prefix) | TTFT **62.3 ms** | 8.92× vs cold (M10 re-run; matches the 09-18 verbal 63.0 ms within 1.1%) |
 | W4 mainline weight residency (8B) | **3.34 GB** = 0.26× fp16 | Marlin's repack *replaces* the v1 pack; M10 released the 3.335 GB dead copy → KV pool 1.52→3.16 GB (+108%, measured — the earlier "+220%" assumed freed bytes land 1:1 in the pool, they don't) |
 | context length axis (W4A16+KV4, YaRN) | 32K **13.3** · 64K **7.1** · 128K **3.7** | Each doubling costs ~×0.53 decode (KV-read-bound) and ×2.7–3.0 cold prefill (6.7 → 17.8 → 53.2 s) at 13.4 GB peak — `results/m11_yarn_niah.txt` |
+| **concurrency axis**, 1.7B fp16+KV4 (M12) | bs1→32 **24.43×** (3572.8 tok/s decode window; 12.99× to bs=16 on 8B W4A16KV4) | Per-request 146 → 112 tok/s. The finding is a *negative* one: n-gram speculation **reverses** under concurrency on 1.7B (spec/off = 1.90× at bs=1 → 0.90× at bs=16 → 0.77× at bs=32) — `results/m12_batch_1.7b.txt` |
+| vs **official vLLM 0.11** (same card, same prompt token ids, fp16↔fp16, wall clock) | **0.67–0.73× of vLLM**, flat across bs | Batch scaling curves coincide (24.43× vs 23.91×) → looks like a per-step constant cost, not a scheduler defect (not profiled, *unproven*). What 4-bit does buy is capacity: KV pool **1.79×** at equal utilization (135,936 vs 75,808 tokens) — `results/m12_vllm_1.7b.txt` |
 
 > **Speculation numbers are greedy.** At `temperature>0` acceptance runs on the Leviathan
 > ratio rule, which is distribution-lossless but changes the game: n-gram on repetitive text
@@ -79,6 +81,19 @@ python -m qslab.api.cli generate --model models/Qwen3-8B \
   --spec ngram --spec-gamma 4 --device cuda:3 --max-tokens 64
 ```
 
+```bash
+# Service surface (M12): OpenAI-compatible, one pump thread owns the engine.
+# Optional extra keeps the core package web-dependency-free:  pip install -e .[serve]
+python -m qslab.api.server --model models/Qwen3-8B \
+  --w4 models/Qwen3-8B-qslab-w4-awq --smooth-kv results/smooth_kv4_qwen3-8b.pt \
+  --device 1 --port 8077 --max-num-seqs 16
+curl -s localhost:8077/v1/chat/completions -H 'Content-Type: application/json' \
+  -d '{"messages":[{"role":"user","content":"The capital of France is"}],"max_tokens":24,"stream":true}'
+# Measured (on the 1.7B model): 8 concurrent requests land in one batch —
+# 384 tokens / 0.444 s = 865 tok/s wall, results/m12_service_smoke.txt.
+# Known limits: a disconnect does not cancel, and there is no auth.
+```
+
 Low-level (what the benchmarks and step-level tests use — the facade is a thin wrapper
 over this):
 
@@ -101,7 +116,9 @@ while not eng.is_finished():
 ## Repository map
 
 ```
-qslab/api/        L4 facade: LLM / SamplingParams / CLI (wraps the runtime below)
+qslab/api/        L4 facade: LLM / SamplingParams / CLI, plus an OpenAI-compatible HTTP
+                  server (M12, aiohttp behind the `.[serve]` extra — one pump thread owns
+                  the engine so concurrency still forms real batches)
 qslab/runtime/    the current engine (paged int4 KV, continuous batching, CUDA Graph,
                   n-gram / lookahead / draft speculation + adaptive gamma
                   (a one-way ratchet that only trims the proposal list — it cannot yet
@@ -116,6 +133,6 @@ results/          raw result files (evidence; not regenerated)
 docs/             ARCHITECTURE.md (entry) + archive/ (historical designs)
 notes/            milestone write-ups M0..M9 with raw numbers (M10+ is recorded in
                   docs/ARCHITECTURE.md + TODO.md instead, since it is measurement re-runs)
-tests/            pytest suite (56 non-e2e + 41 e2e, 97 total, all green)
-TODO.md           evidence-chain gaps (all six closed by 09-19) + remaining functional work
+tests/            pytest suite (63 non-e2e + 41 e2e, 104 total, all green)
+TODO.md           evidence-chain gaps (all closed by 09-19) + M12's new accounts 12–16
 ```

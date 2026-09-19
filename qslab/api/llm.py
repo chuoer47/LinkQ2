@@ -82,6 +82,12 @@ class LLM:
 
     # ------------------------------------------------------------------
     @property
+    def engine(self):
+        """The wrapped LLMEngine. Public because the service surface drives
+        step() directly and must not reach into a private attribute."""
+        return self._engine
+
+    @property
     def tokenizer(self):
         return self._engine.tokenizer
 

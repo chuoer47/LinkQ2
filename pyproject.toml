@@ -16,6 +16,8 @@ dependencies = [
 [project.optional-dependencies]
 # adapters layer only — qslab core must NOT import these
 adapters = ["transformers==4.57.6", "accelerate", "tokenizers"]
+# service surface only (qslab/api/server.py) — the core stays web-free
+serve = ["aiohttp>=3.9"]
 
 [tool.setuptools.packages.find]
 include = ["qslab*"]
