@@ -143,8 +143,8 @@
     对应物（它最好到 fp8 KV），所以 KV4 的容量收益只能做成"同 util 下池 135,936 vs
     75,808 tokens"这种记账式对照，做不了等精度吞吐对照。
 17. **主模型不给标定文件不会报错，只会静默退化**（写教程 04 章时实测）：
-    `allocate_kv_cache` 把 K 的尺度表开成 `torch.zeros(H, D)`（`model_runner.py:141`），
-    只有 `load_smoothing(path)` 会往里写（`:160-181`，`if not path: return`）；
+    `allocate_kv_cache` 把 K 的尺度表开成 `torch.zeros(H, D)`（`model_runner.py:142-143`），
+    只有 `load_smoothing(path)` 会往里写（`:160-180`，`:168` 处 `if not path: return`）；
     而 store 与 decode 都按 `ks.dim()==2` 走 STATIC_K 分支（`paged_decode.py:183/203`），
     **没有** per-token 的动态回退。于是 `smooth_kv=None`（`api/cli.py:37`、
     `api/server.py:291` 的默认值）时解码读出的 K 恒为 0。
