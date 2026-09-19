@@ -3,11 +3,17 @@
 按主题分类。每类目录内的 `README.md` = 证据链（数字 → results 原始文件 → 结论）+ 复现指令。
 `results/` 原始文件**保留不动**，是证据底稿。
 
+**底稿怎么来的**：多数脚本只往 stdout 打印，落盘方式是"命令行 + 原始输出"一起重定向进
+`results/m<里程碑>_*.txt`（例：`m9_prefix_cache.txt`、`m11_yarn_niah.txt`）。因此每份底稿
+开头都能直接复制出命令；改脚本时**不要**让它去覆盖已有底稿。
+
 ## 复现的环境前置（全部脚本通用）
 
 ```bash
 # 服务器 4090_public，conda env: qslab；所有命令在仓库根目录执行（脚本按 cwd 写 results/）
 conda activate qslab
+# ⚠ 跑之前先看 nvidia-smi 挑空卡（本项目全程单卡跑）。0 号与 2 号是别人的常驻作业，
+#   历史上所有底稿用的都是 1 号或 3 号：CUDA_VISIBLE_DEVICES=1/3
 # ⚠ 只把 env/bin 塞进 PATH、不 activate 是不够的（M10 踩过一次，8B W4 直接跑挂）：
 #   CUDA_HOME/CC/CXX 未设时 torch 会把 marlin 扩展当没编译过，重新 JIT 到新的缓存目录，
 #   然后用系统 gcc(>13) 编译失败（还报 cusparse.h 找不到）。纯 fp16 脚本感觉不到，
@@ -32,6 +38,7 @@ export CUDAHOSTCXX=$CONDA_PREFIX/bin/x86_64-conda-linux-gnu-g++
 | `05-spec-ngram/` | n-gram 投机（新 runtime） | M9 | bench_spec_ngram |
 | `06-spec-draft/` | draft 投机 + 概率比接受的温度代价 + 动态 γ 扫参 | M9/M10 | bench_spec_draft, bench_spec_temperature, bench_spec_adaptive_tune |
 | `07-prefix-cache/` | 前缀缓存 TTFT | M9 | bench_prefix_cache |
+| `08-long-context/` | YaRN 分档 NIAH（32K/64K/128K 速度 + 召回 + 失败形态） | M11 | bench_niah_yarn |
 | `archive-legacy/` | 旧引擎 spec bench（M3/M6 口径） | M3/M6 | bench_spec, bench_spec_modes |
 
 ## 关键结果速查（→ 底稿文件）
@@ -51,3 +58,5 @@ export CUDAHOSTCXX=$CONDA_PREFIX/bin/x86_64-conda-linux-gnu-g++
 | ↳ 腾出的字节折成 KV 池（8B @util=0.6） | 1.52→3.16 GB（**实测 +108%**；此前按"字节直接进池"估的 +220% 不成立，池只兑现预算的 ~51%） | 同上 |
 | KV4 PPL 代价 | +0.369 | results/m8_kv4_ppl.json |
 | W4 kernel 三方 | M≥8 Marlin 碾压 | results/m5_kernel_bench.json |
+| 长上下文速度曲线（8B W4A16KV4 + YaRN） | decode 13.3 / 7.1 / 3.7 tok/s @32K/64K/128K；冷 prefill 6.7 / 17.8 / 53.2 s；peak 13.38 GiB | results/m11_yarn_niah.txt |
+| 分档 NIAH 召回 | 6/8、8/8、7/8、**3/8**（128K）。**这是严格匹配下界，不是检索成功率**：128K 的漏 4/5 是"数字前缀全对、尾部丢"⇒ 塌点在转写；YaRN 对召回的贡献**未证**（无 128K 基线） | 同上 + `benchmarks/08-long-context/README.md` |

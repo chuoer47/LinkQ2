@@ -1,6 +1,8 @@
 # PROGRESS.md — qserve-lab 唯一状态源
 
-## 当前阶段：**R0-R6 工程化重构**
+## 当前阶段：**M11 完成（2026-09-19）** — 引擎主线 W4A16+KV4+投机+前缀缓存+YaRN 长上下文，
+证据链缺环与功能遗留全部清空；剩余三项都是"新账/优化空间"（TODO 9 早停成本通道、
+10 长上下文评分口径、11 KV 池 2× 过计费）。以下按时间顺序保留全过程。
 
 ### R0 flash-attn 安装
 - [x] flash-attn 2.7.4 (cu124/torch2.5/py3.11 预编译 wheel) 装入 qslab env
@@ -293,5 +295,50 @@ M10 本体不产性能数字，留下三处"口算/口录/从未测"。本轮把
       报 `Ninja is required…` / `cusparse.h: 没有那个文件或目录`，整条 W4 线在加载阶段崩。
       纯 fp16 脚本感觉不到，所以这个坑只在碰 W4 的 run 上暴露。已写进 `benchmarks/README.md`。
 - 缺环状态：**1–6 全部闭合**，且①引出的改动当天落地复测；⑤的两个遗留先验也在同日扫完
-      （结论是不改代码，见上）。剩余两件功能性事项：128K YaRN demo（未跑）与
-      "让动态 γ 的早停真的省钱"（TODO 第 9 条，优化空间，非缺环）。
+      （结论是不改代码，见上）。功能性剩余：128K YaRN demo **同日 M11 闭合**（见下节），
+      只剩"让动态 γ 的早停真的省钱"（TODO 第 9 条，优化空间，非缺环）。
+
+### M11：长上下文——先实现 YaRN，再按 32K/64K/128K 分档跑（2026-09-19 完成，遗留 7 闭合）
+
+- [x] **前提先塌了一次**：TODO 从 M4 挂下来的"128K YaRN demo 未跑"，真去跑才发现 runtime
+      **没有 YaRN**——`Qwen3Attention` 收了 `rope_scaling` 之后直接丢弃，不报错。这比"没跑"更糟：
+      配置写了、任务跑完、数字好看，而长度外推根本没发生。
+- [x] **实现**：`rotary.py::_yarn_inv_freq`（从 transformers 4.57.6 的
+      `_compute_yarn_parameters` 转写：`find_correction_dim`、truncate→floor/ceil、clamp、
+      `linear_ramp_factor` 在 low==high 时 `high+=0.001`、按 `1-ramp` 混合）+
+      `attention_factor = 0.1·ln(f)+1.0`（f=3.2 → **1.1163150809805682**）**同乘 cos 与 sin**；
+      `qwen3.py` 停止丢参数；`config.py` 新增 `rope_scaling` 字段，在 `__post_init__` 里把
+      `hf_config.max_position_embeddings` 改写成 `original×factor` **再**过原有的
+      `max_model_len` clamp ⇒ 天花板只有一处定义，bench 与 engine 不可能各说各话；
+      `get_rope` 的 `lru_cache(1)` → 按 rope 设置建键的 dict（36 层共享一份，同以前）。
+- [x] **对拍锁**：`tests/test_rotary_yarn.py` 12 条（9 CPU + 3 e2e）——`inv_freq` 与 HF
+      `torch.equal`，cos/sin 在位置 0/1/7/400/5000/20480/40959/131071 上 **`atol=0` 逐位相同**。
+      零容差是**先量出来才敢写**的（einsum 与 matmul 的 float32 外积在这里给同一个数）。
+      另两条防静默锁：native 路径与实现之前**逐位相同**且 `attention_scaling == 1.0`
+      （否则这次重写会悄悄改动 M0–M10 所有数字的口径）；非 `yarn` 的 `rope_type` 抛
+      `NotImplementedError` 而不是回落 native。全量 **97/97**（56 非 e2e + 41 e2e）。
+- [x] **分档 NIAH**：`benchmarks/08-long-context/bench_niah_yarn.py` +
+      `results/m11_yarn_niah.txt`（8B W4A16+KV4，util 0.8，只用当时空闲的 3 号卡，
+      4 深度 × 2 次，greedy，投机 off）。速度：冷 prefill **6.7 / 17.8 / 53.2 s**、
+      decode **13.3 / 7.1 / 3.7 tok/s**（32K/64K/128K），peak ≤13.38 GiB；
+      召回 6/8、8/8、7/8、**3/8**。
+- ⚠ **第一轮整张 prefill 表作废并重跑**，两条仪器缺陷：① 同列 trials 共用同一段 filler ⇒
+      **前缀缓存命中**，32K 的 prefill 从 6.7s 一路衰减到 1.0s（列均值 3.9s 是假数）
+      ⇒ 改成每次 trial 的 haystack 按相位错开；② 答案只印 24 字符 ⇒ 这族 prompt 开头 24
+      字符恒定，所有 miss 长得一模一样、**无法归因** ⇒ 片段加宽到 60 字符 + 单独抽 `got=`。
+      下面那条"塌点在转写"的结论完全依赖第 ② 条改动。
+- **读数（能读与不能读分开写）**：128K 的 5 次漏里 4 次是"值的前 4–5 位全对、尾部丢"
+      （`92142` vs 921426、`74403` vs 744039），且每次都自己吐终止符收尾（22–25 tok ≪ 预算）
+      ⇒ **塌点在转写，不在注意力查表**（从 12 万 token 外找回 5 位数字不可能是猜的）；
+      同族 needle 在 32K 也翻过车（`6363685` vs 636685）⇒ 这条逐位转写通道本来就脆。
+      **不能读**：YaRN 对召回的贡献——32K 两列同代码同 needle 还差 2 例、64K 换个相位
+      8/8→7/8（每列 n=8 会整格移动），且 128K 没有可比基线（不缩放 rope 跑 131K 是越界
+      外推不是对照）⇒ **未证**。
+- 三条结构性事实（都记进 TODO/ARCHITECTURE）：① 长上下文 PPL 在这套 runtime 上
+      **结构上不可得**（逐位置 logits 131072×151936 ≈ 40 GB）；② KV 池按 **72 KiB/token**
+      计费，是 int4 载荷（36 KiB）的约 2×（`model_runner.py:123-124`；多出那一半的归属
+      未逐字节验证）⇒ 128K 档只剩 **1.2×** 池余量，`max_num_seqs=2` 贴着上限（TODO ⑪）；
+      ③ 严格匹配的 `value in answer` 把"定位对、抄错末位"和"完全没找到"记成同一个 miss
+      ⇒ 128K 的 38% 是**下界**不是检索率（TODO ⑩）。
+- 门面侧零改动：`rope_scaling` / `max_model_len` 经 `LLM(**runtime_config)` 直通 `Config`，
+      128K 不需要新 API；用法示例在 `benchmarks/08-long-context/README.md` 与根 README。

@@ -50,7 +50,7 @@ class Qwen3Attention(nn.Module):
         self.v_proj = Linear(hidden_size, self.kv_size, bias=qkv_bias)
         self.o_proj = Linear(self.q_size, hidden_size)
         self.rotary_emb = get_rope(self.head_dim, self.head_dim, max_position,
-                                   rope_theta)
+                                   rope_theta, rope_scaling)
         self.attn = PagedAttention(self.num_heads, self.head_dim, self.scaling,
                                    self.num_kv_heads)
         self.q_norm = RMSNorm(self.head_dim, eps=rms_norm_eps)

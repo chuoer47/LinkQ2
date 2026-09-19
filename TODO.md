@@ -1,4 +1,4 @@
-# TODO — 证据链缺环与收尾遗留（2026-09-18 整理；同日 M10 复核后更新；09-19 补测后再次更新）
+# TODO — 证据链缺环与收尾遗留（2026-09-18 整理；同日 M10 复核后更新；09-19 补测后再次更新；09-19 M11 闭合遗留 7 并新账 10/11）
 
 ## 缺环（证据链不完整处）
 
@@ -81,11 +81,20 @@
 
 > **缺环 1–6 于 2026-09-19 全部闭合**（底稿：`results/m10_w4_residency.txt`、
 > `m10_draft_sweep.txt`、`m10_spec_temperature.txt`，以及追加 8B 段的
-> `results/m9_prefix_cache.txt`）。下列 7–8 为功能性收尾，不是证据链问题。
+> `results/m9_prefix_cache.txt`）。收尾遗留 7 于同日 M11 闭合（`results/m11_yarn_niah.txt`）；
+> 剩下的 9/10/11 是功能与新账，不是证据链问题。
 
 ## 收尾遗留（功能，非证据链）
 
-7. **128K YaRN demo 未跑**（M4 起遗留）。
+7. ~~**128K YaRN demo 未跑**（M4 起遗留）~~ — **M11（09-19）已跑，且前提先修了一遍**：
+   runtime **没有 YaRN**——`rope_scaling` 在 `Qwen3Attention` 收到后被直接丢弃，配置写了
+   不生效也不报错。本轮先实现（`rotary.py`/`config.py`/`qwen3.py`，与 transformers 4.57.6
+   **逐位相同**，12 条锁在 `tests/test_rotary_yarn.py`），再按 32K/64K/128K 分档跑 NIAH：
+   底稿 `results/m11_yarn_niah.txt`、脚本 `benchmarks/08-long-context/bench_niah_yarn.py`。
+   读数：128K 端到端跑通，decode **13.3 → 7.1 → 3.7 tok/s**、冷 prefill **6.7 → 17.8 → 53.2 s**、
+   peak 13.38 GiB；召回 3/8（其余三档合计 21/24，Fisher p≈0.012），但**漏的形态是"数字前缀
+   全对、尾部丢"**（`92142` vs 921426）⇒ 塌点在转写不在检索；**YaRN 对召回的贡献未证**
+   （32K 两列同代码同 needle，换 haystack 相位就能整格移动）。
 8. ~~models/Qwen3-0.6B-qslab-w4-awq2~~ 已删（A 档清理 11795fd）；tests/ 4 个辅助脚本已移 scripts/archive/m-verification/。
 9. **让动态 γ 的"早停"真的省钱**（M10 续扫参后新账，见缺环⑤第③条）：当前裁窗口只丢弃
    已付费的提案，控制器没有成本通道。两条路——①`DraftProposer` 按 `cap` 提前结束它的 γ 次
@@ -93,6 +102,16 @@
    ①便宜且不需要重录图族。**收益未测**：只有外推上限（窗口 2 的 tok/step 2.25 若配上 γ=2
    那档 16.3ms 的步价，natural 会到 ~1.4×；21.5→16.3 的 5.2ms 里"多 2 次提案前向"与
    "更宽 verify"各占多少没拆开）。落地后"回升"才重新值得测（需要逐位置接受率，见缺环⑤）。
+10. **长上下文评分口径**（M11 新账，底稿 `results/m11_yarn_niah.txt` §5③）：`value in answer`
+    把"从 12 万 token 外把 6 位数字捞回来、末位抄错"和"完全没找到"记成同一个 miss，
+    于是每次底稿都要人工重读一遍答案才敢下结论。需要逐位/编辑距离口径（或至少分开统计
+    "前缀对长度"）。本轮**没改脚本**——改了就没有可比的两轮；128K 档 38% 这个数因此是
+    严格匹配下界，不是"检索成功率"。
+11. **KV 池按 72 KiB/token 计费，是 int4 载荷的约 2×**（M11 读代码发现，
+    `model_runner.py:123-124` 的 `slot_bytes = 2 * head_dim`）：36 层 × 8 KV 头 × 128 × 0.5 B
+    × 2(K,V) = 36 KiB 就够。多出的一半归属（per-channel scales / 对齐）**未逐字节拆开验证**。
+    后果直接可见：128K + 32 生成要吃 9.0 GiB 池，`UTIL=0.8` 只剩 1.2× 余量、
+    `max_num_seqs=2` 贴着上限 ⇒ 修掉计费口径约等于再翻一倍上下文/并发。**收益未测**。
 
 ## M10 已完成（2026-09-18，功能遗留全部落地）
 
@@ -147,3 +166,28 @@
 - [x] 顺带量化混沌带（natural 投机重复 ±8%、平解码与 copy 投机可复现）⇒ 立了条口径：
       natural 上 <5% 的格间差不读成结论。`tests/test_spec_acceptance.py` 加一条 CPU 锁
       （窗口是误触发滤波器：单轮 1/4 不触发、连续三轮 ≤1.0 才触发）。全量测试 85/85。
+
+## M11（2026-09-19，128K YaRN：先实现，再分档跑）
+
+- [x] **实现 runtime 的 YaRN**：`rotary.py` 加 `_yarn_inv_freq`/`_yarn_attention_factor`
+      （从 transformers 4.57.6 转写：`find_correction_dim`、truncate→floor/ceil、clamp、
+      `linear_ramp_factor` 的 `high += 0.001` 退化处理、按 `1-ramp` 混合、
+      `attention_factor = 0.1·ln(f)+1.0` 同乘 cos 与 sin），`qwen3.py` 停止丢弃 `rope_scaling`，
+      `config.py` 新增 `rope_scaling` 字段并在 `__post_init__` 里把
+      `hf_config.max_position_embeddings` 改写成 `original × factor` **再**过原有 clamp
+      （天花板只有一处定义）。`lru_cache(1)` → 按 rope 设置建键的 dict（36 层共享）。
+- [x] **正确性锁**：`tests/test_rotary_yarn.py` 12 条 —— 与 HF 的 `inv_freq` 差 ≤1e-9、
+      cos/sin 缓存 `rtol=0, atol=0`（**逐位相同**，位置 0…131071）、attention factor 严格相等；
+      另两条防静默：native 路径的缓存与实现前**逐位相同**且 `attention_scaling == 1.0`
+      （这次重写不会改动其他里程碑的数字）、非 yarn 的 `rope_type` 抛 `NotImplementedError`
+      而不是被忽略（一次没生效的长度外推会跑完、数字好看、什么都不能证明）。
+      全量测试 **97/97**。
+- [x] **分档 NIAH 落盘**：`benchmarks/08-long-context/bench_niah_yarn.py` +
+      `results/m11_yarn_niah.txt`（8B W4A16+KV4，util 0.8，GPU3）。速度曲线是本轮最硬的
+      产品数字（见上第 7 条）；召回读数只允许说"128K 更差 + 差在转写"，
+      YaRN 的贡献**未证**（无 128K 基线：不缩放是越界外推而非基线）。
+- [x] **两条 bench 口径教训**（已写进 `benchmarks/08-long-context/README.md`）：
+      ① 同列 trials 的 haystack 必须**相位错开**，否则前缀缓存会把 prefill 从 6.7s 打到 1.0s
+      —— 第一轮整张 prefill 表因此作废并重跑；② 答案片段必须宽到看得见数字（≥60 字符）+
+      单独抽 `got=`，否则 24 字符套话让所有 miss 长得一样、无法归因。
+- [ ] 新账 10（评分口径）与 11（池计费）见上。

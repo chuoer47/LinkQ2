@@ -9,6 +9,7 @@ class Config:
     max_num_batched_tokens: int = 16384
     max_num_seqs: int = 512
     max_model_len: int = 4096
+    rope_scaling: dict | None = None  # {"rope_type": "yarn", "factor": 3.2} → 128K
     gpu_memory_utilization: float = 0.9
     tensor_parallel_size: int = 1
     enforce_eager: bool = False
@@ -42,4 +43,21 @@ class Config:
         assert self.kvcache_block_size % 128 == 0  # qslab: KV4 block alignment
         assert 1 <= self.tensor_parallel_size <= 8
         self.hf_config = AutoConfig.from_pretrained(self.model)
+        if self.rope_scaling:
+            scaling = dict(self.rope_scaling)
+            native = int(self.hf_config.max_position_embeddings)
+            factor = float(scaling.get("factor", 1.0))
+            assert factor > 1.0, "rope_scaling only extends; leave it None to stay native"
+            scaling.setdefault("rope_type", scaling.pop("type", "yarn"))
+            # HF's BC alias, so `rope_type` below is the only name that matters
+            scaling.pop("type", None)
+            original = int(scaling.get("original_max_position_embeddings") or native)
+            scaling["original_max_position_embeddings"] = original
+            # A YaRN release ships exactly this: the extended
+            # max_position_embeddings plus the rope dict that reaches it.
+            # Rewriting hf_config (not just our own field) keeps the rope cache
+            # size and the clamp below on one ceiling.
+            self.hf_config.rope_scaling = scaling
+            self.hf_config.max_position_embeddings = int(original * factor)
+            self.rope_scaling = scaling
         self.max_model_len = min(self.max_model_len, self.hf_config.max_position_embeddings)

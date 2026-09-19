@@ -1,7 +1,7 @@
 # qserve-lab 架构与项目主线（唯一入口）
 
-> 生成于 2026-09-18。本文是项目的**唯一权威入口**：架构分层、M0→M10 演进主线、
-> 当前最终状态的数字与结论。所有数字取自 `results/` 原始文件与 `notes/` 里程碑笔记，
+> 生成于 2026-09-18（M11 于 2026-09-19 追加）。本文是项目的**唯一权威入口**：架构分层、M0→M11 演进主线、
+> 当前最终状态的数字与结论（M11：长上下文 rope 外推）。所有数字取自 `results/` 原始文件与 `notes/` 里程碑笔记，
 > 与代码现状交叉核对过。旧设计文档已移入 `docs/archive/`（结论以本文为准）。
 
 ---
@@ -22,6 +22,7 @@
 | attention | Triton 量化 paged kernel + flash-attn prefill + 手写 CUDA GEMV | vLLM / Marlin |
 | runtime | paged KV 池 + 连续批 + CUDA Graph + 前缀缓存 | nano-vllm → vLLM V1 |
 | 投机推理 | n-gram / lookahead（查表）+ chained draft model；接受律 greedy argmax 前缀 + 温度 Leviathan 概率比（两者都无损） | vLLM V1 / TGI / Leviathan et al. |
+| 长上下文 | YaRN rope 外推（M11 起，自己实现；非 yarn 的 rope_type 抛错而非静默忽略） | YaRN / HF transformers |
 
 - **方法论**（贯穿全项目）：手写 → 对比官方 → 记笔记；每个里程碑有 notes 文件，
   **证伪的实验和成功的同等保留**；正确性测试必须有"零容差对拍物"。
@@ -44,6 +45,7 @@
 | 8B + draft γ=4 自然，**开自适应窗口**（只裁不涨） | 98.8–112.4 | 1.01–1.14×（n=5；同配置钉死上限 0.90–1.05×、均值 0.98×） | results/m10_draft_sweep.txt + m10_adaptive_tune.txt |
 | 1.7B + n-gram γ=4 复读，**T=0.7**（概率比接受） | 394.7 | 同格 greedy 449.0 → 少 12.4% | results/m10_spec_temperature.txt |
 | 1.7B 新 runtime FP16 decode | 148.7 | 3.5×（vs M0 42.1） | notes/M8 §五 |
+| **上下文长度轴**（8B W4A16KV4，YaRN，M11） | 32K **13.3** / 64K **7.1** / 128K **3.7** tok/s | 与配置轴不可比（长度维度）；每翻倍 ×0.53，冷 prefill 6.7 / 17.8 / 53.2 s | results/m11_yarn_niah.txt |
 
 ### 2.2 质量
 
@@ -54,6 +56,7 @@
 | 权重压缩 | 16G → 2.49G（**6.6×**） | qslab_w4_v1 打包 |
 | KV 显存 | fp16 的 **2×** 节省（池口径）/ 3.5×（序列口径） | notes/M8 §四 |
 | 32K NIAH | fp16 与 KV4 双 100% | results/m2_niah.json + M4 |
+| 分档 NIAH（8B W4A16KV4，4 深度×2，严格匹配） | 32K native 6/8、32K yarn3.2 8/8、64K yarn1.6 7/8、**128K yarn3.2 3/8** | results/m11_yarn_niah.txt。**下界不是检索率**：128K 的 5 次漏里 4 次是"数字前缀全对、尾部丢"（`92142` vs 921426），每次都自己吐终止符收尾（22–25 tok，远小于预算）⇒ 塌点在转写；每列 8 次会随 haystack 相位整格移动，故 YaRN 对召回的贡献**未证** |
 | 前缀缓存 TTFT（3800-token 前缀，8B） | 555.9 → 62.3ms（**8.92×**） | results/m9_prefix_cache.txt（M10 重跑；无 W4 开关，fp16 权重需 UTIL=0.9） |
 | W4 主线权重常驻（释放 v1 pack 后） | 8B **3.339 GB = 0.26× fp16**（双份时 6.674 GB）、1.7B 0.678 GB；KV 池 1.52→**3.16 GB（+108%）** | results/m10_w4_residency.txt（改动前后两版表都在） |
 | CUDA Graph | batch1 6.5×、8 路连续批 1048 tok/s | notes/M8 §五 |
@@ -98,6 +101,15 @@
 11. **评投机不要用带随机字的 prompt**：随机家族在 T=0.7 出现过 3.3×/3.8× 的"高潮"，探针
     证明该温度下模型退化成周期为 1 的重复 token（56/64 个同一 id），任何提案器都能命中——
     测到的是轨迹形状，不是提案质量。
+12. **长上下文的墙不在注意力，在转写**：128K 档 NIAH 从 8/8 级掉到 3/8（Fisher p≈0.012），
+    但 miss 的形态是"值的前 4–5 位全对、尾部丢"（`92142` vs 921426）且答案自己收尾——
+    从 12 万 token 外找回 5 位数字几乎不可能是猜的，所以**读到了、抄错了**。同族 needle 在
+    32K 也翻过车（`6363685` vs 636685），说明这条逐位转写通道本来就脆，长上下文只是加压。
+    ⚠ 反向的读法要挡掉：32K 两列（native 6/8 vs yarn3.2 8/8）同代码同 needle，换一下
+    haystack 相位就整格移动（64K 两轮 8/8→7/8），所以**这轮不能给 YaRN 的召回效果记账**；
+    也没有 128K 的可比基线（不缩放 rope 跑 131K 是越界外推）。YaRN 实现本身由逐位对拍锁住，
+    不靠这份底稿。另记一条结构性事实：KV 池按 **72 KiB/token** 计费，是 int4 载荷（36 KiB）的
+    约 2×，128K 因此只拿到 1.2× 池余量（多出那一半的归属未逐字节验证）。
 
 ---
 
@@ -115,6 +127,8 @@ L3  qslab/runtime/      新 runtime（M8 起，主引擎）:
                           attention.py    prefill(flash-attn+前缀物化) / decode(Triton paged)
                           paged_decode.py int4 池 Triton kernel（decode/verify/materialize）
                           qwen3.py primitives.py rotary.py sampler.py ...
+                          config.py       rope_scaling 入口（改写 hf 天花板再过 max_model_len clamp）
+                          rotary.py       M11: YaRN 反频率 + attention_factor；按 rope 设置建键共享缓存
 L2  qslab/models/       Qwen3 backbone（旧引擎用，patched.py 替换子类）
                           w4linear.py     W4Linear → QuantBackend.linear()
 L1  qslab/quant/        packfmt.py  qslab_w4_v1 打包格式
@@ -378,26 +392,61 @@ TODO 的 6 条缺环一次结清：
 因果解释撤，原始读数留。⑦ 同配置重复跑的离散度第一次量化下来（natural 投机 tok/step ±8%、
 平解码 0.9%、copy 投机步数完全相同），据此定了条口径：**natural 上 <5% 的格间差不读成结论**。
 
+### M11 — 长上下文：先实现 YaRN，再按 32K/64K/128K 分档（2026-09-19）
+
+TODO 从 M4 挂下来的"128K YaRN demo 未跑"，真去跑的第一步是发现**它没法跑**：
+`rope_scaling` 在 `Qwen3Attention` 收到后直接丢弃，配置写了不生效、也不报错——一次"看起来
+做了长度外推"的实测会跑完、数字好看、然后什么都不能证明。所以 M11 分两段。
+
+**① YaRN 是 qslab 自己的（不是门面层的开关）**
+- `rotary.py::_yarn_inv_freq` 从 transformers 4.57.6 的 `_compute_yarn_parameters` 转写：
+  `find_correction_dim = dim·ln(orig/(n_rot·2π))/(2·ln(base))`、truncate 取 floor/ceil、
+  clamp 到 `[0, dim-1]`、`linear_ramp_factor` 在 low==high 时 `high += 0.001` 防除零、
+  按 `1-ramp` 混合；`attention_factor = 0.1·ln(factor)+1.0`（f=3.2 → **1.1163150809805682**）
+  **同乘 cos 与 sin**。Qwen3-8B 几何：`native=40960`、`rope_theta=1e6`、head_dim 128。
+- 实测与 HF **逐位相同**：`inv_freq` `torch.equal` True，cos/sin 在位置
+  0/1/7/400/5000/20480/40959/131071 上 maxdiff `0.000e+00`。einsum 与 matmul 的 float32
+  外积在这里给同一个数——**所以测试写的是 `atol=0` 而不是容差**（先量出来再敢这么锁）。
+- 两条防静默的锁：① **native 路径逐位不变**（`attention_scaling == 1.0`，重写前的缓存 ==
+  重写后的缓存，`rtol=0, atol=0`）——否则这次重写会悄悄改动 M0–M10 所有数字的口径；
+  ② 非 `yarn` 的 `rope_type` 抛 `NotImplementedError`，而不是回落到 native。
+- `get_rope` 的 `lru_cache(1)` 换成按 rope 设置建键的 dict（36 层共享一份，和原来一样；
+  dict 不可哈希，所以键是 `tuple(sorted(items))`）。
+- **配置侧只有一个天花板**：`Config.rope_scaling` 在 `__post_init__` 里把
+  `hf_config.max_position_embeddings` 改写成 `original × factor`，**再**过原有的
+  `max_model_len = min(max_model_len, max_position_embeddings)`。factor 必须 >1（只外扩不外缩）。
+  这样 bench 和 engine 不可能对"能跑多长"各说各话。
+
+**② 分档 NIAH（`results/m11_yarn_niah.txt`）**：三条读数见 §2.3 第 12 条。这里记两条
+**仪器教训**（第一轮的表就是因为它们作废重跑的）：
+- 同列 trials 共用一段 filler ⇒ **前缀缓存命中**，32K 的 prefill 从 6.7s 一路衰减到 1.0s，
+  列均值全是假数。修法是把每次 trial 的 haystack 在重复段内按相位错开。
+- 答案片段只印 24 字符 ⇒ 这族 prompt 的开头 24 字符恒定，所有 miss 长得一模一样、
+  **无法归因**。加宽到 60 字符 + 单独抽 `got=`/`exp=` 之后，"塌点在转写"这条结论才看得见。
+- 顺带一条口径：每列 8 次样本会随 haystack 相位**整格移动**（64K 两轮 8/8→7/8），
+  所以单档 recall 只能用来描述失败形态，不能用来排序。
+
 ### 测试现状（locks）
 
 非 e2e 47 + e2e 38（含 8B 3、门面 6、投机接受律 8）= **85 全绿**
 （2026-09-18 首次全量；09-19 因 `_adapt_gamma` 定稿 + 棘轮断言改名重跑 81/81，同日
 释放 v1 pack 后再跑 **84/84**，新增 3 条 CPU 常驻契约测试；同日扫参后又跑 **85/85**，
-新增 1 条 CPU 窗口锁，单卡串行）。相比 M9（61）净增 24：接受律/自适应 γ 8 + lookahead 查表 4（快门档）、门面 6、
-spec runtime 温度路径 2、8B+draft 1、W4 常驻契约 3。自适应那两条断言锁的是**单向棘轮**
+新增 1 条 CPU 窗口锁，单卡串行）。M11 加 rope 对拍 12 条（9 CPU + 3 e2e"配置开天花板"）
+⇒ **97/97**（收集口径实测 56 非 e2e + 41 e2e）。相比 M9（61）净增 36：接受律/自适应 γ 8 + lookahead 查表 4（快门档）、门面 6、
+spec runtime 温度路径 2、8B+draft 1、W4 常驻契约 3、rope 对拍 12。自适应那两条断言锁的是**单向棘轮**
 （`test_adaptive_gamma_shrinks_and_never_grows_back`）与**窗口宽度是误触发滤波器**
 （`test_adaptive_window_is_a_false_positive_filter`），别再按"能涨回去"或"窗口是反应速度旋钮"写测试。
 断言口径：**不逐 token 断言量化输出**（混沌），断言数学结构（接受机制/分布/步数/确定性/
 首位 token/前缀稳定性）。pytest: `pytest tests/ -m "not e2e"` 快门（秒级）/
-全量单卡串行 **3min24s**（81 只，2026-09-18 实测；09-19 的 84/85 只未单独计时）。
+全量单卡串行 **3min24s**（81 只，2026-09-18 实测；09-19 的 84/85/97 只未单独计时）。
 
 ---
 
 ## 5. 已知限制与下一步
 
 M10 收掉了原 1-5 号功能遗留（门面 / 温度投机 / 动态 γ / lookahead 迁移 / 8B+draft 测试），
-其补测轮（2026-09-19）把 6 条证据链缺环全部落盘。下面这些不是"没测过"，而是**测出来的
-结构性限制**，加一件确实没做的事：
+其补测轮（2026-09-19）把 6 条证据链缺环全部落盘；M11（同日）收掉第 4 号遗留（128K YaRN）。
+下面这些不是"没测过"，而是**测出来的结构性限制**，外加 M11 新账的两条（6/7）：
 
 1. **温度投机目前是净亏**：概率比接受在分布上无损（TV<0.06），但吞吐税实测
    +12.4%（ngram copy）到 +63.0%（lookahead copy），natural 上三种提案器 T=0.7 全部
@@ -423,9 +472,23 @@ M10 收掉了原 1-5 号功能遗留（门面 / 温度投机 / 动态 γ / looka
    进的是**分配预算**（8B budget 2.94→6.14 GiB），KV 池只兑现其中 ~51%，实测
    1.52→**3.16 GB（+108%）**，不是先前估的 4.85 GB/+220%；token 容量 ≈2.1 万→≈4.4 万
    （`results/m10_w4_residency.txt` 复测一节）。池子为何只拿一半预算**未证**。
-4. **128K YaRN demo 未跑**（M4 起遗留）。
+4. **~~128K YaRN demo 未跑~~ 已闭合（M11，2026-09-19）**：先决条件是 runtime 根本没有 YaRN
+   （`rope_scaling` 被静默丢弃），实现后与 HF **逐位相同**（`tests/test_rotary_yarn.py` 12 条），
+   分档跑完 ⇒ `results/m11_yarn_niah.txt`。**闭合到"跑得动 + 速度曲线 + 失败形态"这一层**；
+   仍不知道的是 **YaRN 对召回的贡献**——没有 128K 的可比基线（不缩放 rope 是越界外推），
+   而每档 8 次样本会随 haystack 相位整格移动。另外长上下文 PPL 在这套 runtime 上
+   **结构上不可得**（逐位置 logits 在 131072 × 151936 是 40 GB 量级），不是"没跑"。
 5. **旧 `qslab/engine/spec/` 仍在库**：lookahead/dynamic 的逻辑 M10 已迁进 runtime，
    旧包留作冻结 oracle 参照，等旧引擎整体归档时一并处置。
+6. **长上下文评分只有严格匹配口径**（M11 新账）：`value in answer` 把"从 12 万 token 外
+   找回 5 位数字、末位抄错"和"完全没找到"记成同一个 miss，于是 128K 的 38% 是**下界**、
+   且每张底稿都要人工重读答案才敢归因。需要逐位/编辑距离口径（M11 刻意不改脚本，
+   否则两轮不可比）。
+7. **KV 池按 72 KiB/token 计费，是 int4 载荷（36 KiB）的约 2×**（M11 读代码发现，
+   `model_runner.py:123-124` 的 `slot_bytes = 2 * head_dim`）：128K + 32 生成要吃 9.0 GiB
+   池，`UTIL=0.8` 只剩 1.2× 余量，`max_num_seqs=2` 贴着上限。多出那一半的归属
+   （per-channel scales / 对齐）**未逐字节验证**；修掉它约等于再翻一倍上下文/并发，
+   **收益未测**。
 
 证据链与复现：见 `benchmarks/`（脚本）与 `results/`（原始文件）；
 分类导读见 `benchmarks/README.md`（若此文件存在）。
