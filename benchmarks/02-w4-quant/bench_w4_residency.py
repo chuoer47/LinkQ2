@@ -2,10 +2,14 @@
 
 `w4.auto` dispatches at M > CROSSOVER_M = 0, so the v1 GEMV path is unreachable
 on the main line — yet the v1 pack (`qfp`/`scale` buffers, the source of the
-Marlin repack) stays resident next to Marlin's `_B`/`_s`. ARCHITECTURE §5 recorded
-that as a fact and left the size as arithmetic. This measures it: per-backend
-byte totals over a genuinely swapped model, so the reclaimable figure is a number
-instead of a guess.
+Marlin repack) used to stay resident next to Marlin's `_B`/`_s`. ARCHITECTURE §5
+recorded that as a fact and left the size as arithmetic. This measures it:
+per-backend byte totals over a genuinely swapped model, so the reclaimable figure
+is a number instead of a guess.
+
+After the release landed (`uses_v1_pack` in qslab/quant/w4_backends.py) the same
+script is the before/after check: `dead v1` must read 0.000 on the Marlin paths
+and their `resident` column must drop to the repack alone.
 
 Env: MODEL, W4 (packed dir), BACKENDS (space-separated), UTIL.
 """
@@ -40,8 +44,9 @@ def measure(llm):
         b = m._backend
         mr = b._marlin if b.name == "w4.auto" else (b if b.name == "w4.marlin" else None)
         tot["n"] += 1
-        tot["qfp"] += _bytes(m.qfp)
-        tot["scale"] += _bytes(m.scale)
+        # a Marlin layer releases the pack once repacked, so it has no qfp at all
+        tot["qfp"] += _bytes(getattr(m, "qfp", None))
+        tot["scale"] += _bytes(getattr(m, "scale", None))
         tot["act"] += _bytes(getattr(m, "act_scale", None))
         if mr is not None:
             tot["repack"] += _bytes(mr._B, mr._s, mr._ws)

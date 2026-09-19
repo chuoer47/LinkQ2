@@ -119,6 +119,6 @@ class LLM:
         model = self._engine.model_runner.model
         packed = sum(m.weight_memory_bytes() for m in model.modules()
                      if hasattr(m, "weight_memory_bytes"))
-        # W4Linear holds its weights in buffers, so parameters() covers exactly
-        # the modules that were not swapped
+        # a swapped W4Linear keeps its bytes in buffers or in its backend's
+        # repack, never in parameters(), so this sums the unswapped fp16 modules
         return packed + sum(p.numel() * p.element_size() for p in model.parameters())

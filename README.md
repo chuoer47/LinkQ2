@@ -20,7 +20,7 @@ falsified hypotheses kept), current best numbers, known limitations, doc map.
 | + n-gram speculation (γ=4, repetitive) | **310.4** | 3.19×; greedy-only, see caveat below |
 | + draft model (γ=2, natural text) | 116.5 | ~1.19×; M10 reproduced this cell, γ≥3 sits in a noise band |
 | prefix cache hit (3800-tok prefix) | TTFT **62.3 ms** | 8.92× vs cold (M10 re-run; matches the 09-18 verbal 63.0 ms within 1.1%) |
-| Marlin path's dead int4 copy (8B) | **3.335 GB** | ≈ +220% of the KV pool; freeing it is *not* implemented |
+| W4 mainline weight residency (8B) | **3.34 GB** = 0.26× fp16 | Marlin's repack *replaces* the v1 pack; M10 released the 3.335 GB dead copy → KV pool 1.52→3.16 GB (+108%, measured — the earlier "+220%" assumed freed bytes land 1:1 in the pool, they don't) |
 
 > **Speculation numbers are greedy.** At `temperature>0` acceptance runs on the Leviathan
 > ratio rule, which is distribution-lossless but changes the game: n-gram on repetitive text

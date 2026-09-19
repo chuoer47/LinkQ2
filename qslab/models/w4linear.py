@@ -6,9 +6,9 @@ is the layering rule established in docs/design-r1.md and the reason the
 per-M dispatch now lives in the backend instead of here.
 
 Backend names (see qslab/quant/w4_backends.py):
-  "w4.v1"     — custom GEMV kernel (M=1 champion)
-  "w4.marlin" — Marlin tensor-core GEMM (M>=8 champion)
-  "w4.auto"   — hybrid: switches at M>8 using the M5 benchmark crossover
+  "w4.v1"     — custom GEMV kernel (the fallback Marlin can't serve)
+  "w4.marlin" — Marlin tensor-core GEMM (mainline at every M since M9)
+  "w4.auto"   — Marlin wherever usable, v1 only where it is not
 """
 from __future__ import annotations
 
@@ -21,9 +21,6 @@ class W4Linear(torch.nn.Module):
                  act_scale: torch.Tensor | None = None,
                  backend: str = "w4.auto"):
         super().__init__()
-        # keep packed tensors as buffers so .to(device) moves them
-        self.register_buffer("qfp", qfp)          # [O, I/8] uint32
-        self.register_buffer("scale", scale)      # [O, I/g] fp16
         if act_scale is not None:
             self.register_buffer("act_scale", act_scale)
         else:
@@ -39,17 +36,35 @@ class W4Linear(torch.nn.Module):
             backend, qfp, scale, group_size, in_features, out_features,
             act_scale=(self.act_scale if act_scale is not None else None))
 
+        # keep the packed tensors as buffers only while a kernel reads them:
+        # the Marlin repack replaces the v1 pack, and registering it anyway
+        # pinned a second full int4 copy per layer
+        if self._backend.uses_v1_pack:
+            self.register_buffer("qfp", qfp)        # [O, I/8] uint32
+            self.register_buffer("scale", scale)    # [O, I/g] fp16
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self._backend.linear(x)
 
     def to(self, *args, **kwargs):
         # backend may hold tensors outside the module (marlin B/s/workspace)
         super().to(*args, **kwargs)
-        dev = next(iter(self.buffers())).device
+        dev = self._target_device(args, kwargs)
         to_fn = getattr(self._backend, "to", None)
-        if to_fn is not None:
+        if dev is not None and to_fn is not None:
             to_fn(dev)
         return self
+
+    def _target_device(self, args, kwargs):
+        # after super().to() a buffer's device *is* the destination; a layer
+        # that released every buffer has to read it from the call instead
+        for buf in self.buffers():
+            return buf.device
+        dev = kwargs.get("device")
+        if dev is None:
+            dev = next((a for a in args if isinstance(a, (torch.device, str))),
+                       None)
+        return None if dev is None else torch.device(dev)
 
     def weight_memory_bytes(self) -> int:
         return self._backend.memory_bytes()

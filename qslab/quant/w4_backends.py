@@ -11,8 +11,17 @@ import torch
 from qslab.quant.backends import QUANT_BACKENDS
 
 
+def _bytes(*ts) -> int:
+    return sum(t.numel() * t.element_size() for t in ts if t is not None)
+
+
 class _BackendBase:
     """Shared bookkeeping for a single packed weight."""
+
+    #: False once the backend has repacked into its own layout and no longer
+    #: reads the v1 pack. L2 (W4Linear) releases its qfp/scale buffers on this
+    #: flag — holding both was measured as 3.335 GB of dead weight on 8B.
+    uses_v1_pack = True
 
     def __init__(self, qfp: torch.Tensor, scale: torch.Tensor,
                  group_size: int, in_features: int, out_features: int,
@@ -49,7 +58,7 @@ class W4V1Backend(_BackendBase):
         return y.reshape(*orig[:-1], self.out_features).to(x.dtype)
 
     def memory_bytes(self) -> int:
-        return self.qfp.nelement() * 4 + self.scale.nelement() * 2
+        return _bytes(self.qfp, self.scale)
 
 
 @QUANT_BACKENDS.register("w4.marlin")
@@ -58,6 +67,7 @@ class W4MarlinBackend(_BackendBase):
 
     name = "w4.marlin"
     bits = 4
+    uses_v1_pack = False
 
     def __init__(self, qfp, scale, group_size, in_features, out_features,
                  act_scale=None):
@@ -66,6 +76,9 @@ class W4MarlinBackend(_BackendBase):
         from qslab.kernels.marlin_backend import pack_v1_to_marlin
         self._B, self._s = pack_v1_to_marlin(qfp, scale, in_features, group_size)
         self._ws = torch.zeros(out_features // 128 * 16, dtype=torch.int32)
+        # nothing on this path reads the v1 pack again; keeping it cost as much
+        # memory as Marlin's own copy (results/m10_w4_residency.txt)
+        self.qfp = self.scale = None
 
     def usable(self, in_features, out_features, group_size) -> bool:
         return (in_features % 128 == 0 and out_features % 256 == 0
@@ -86,8 +99,7 @@ class W4MarlinBackend(_BackendBase):
         return y.reshape(*orig[:-1], self.out_features).to(x.dtype)
 
     def memory_bytes(self) -> int:
-        return (self.qfp.nelement() * 4 + self.scale.nelement() * 2      # v1 pack
-                + self._B.nelement() * 4 + self._s.nelement() * 2)      # marlin copy
+        return _bytes(self._B, self._s, self._ws)
 
 
 @QUANT_BACKENDS.register("w4.auto")
@@ -108,7 +120,10 @@ class W4AutoBackend(_BackendBase):
     logits (both ~4.0 from fp16, i.e. the W4 quantization itself), so the
     switch costs no accuracy — only the greedy near-tie flips documented in
     notes/M9. When Marlin is usable the v1 copy is not built at all (it was
-    dead weight: auto previously held BOTH packed layouts in memory).
+    dead weight: auto previously held BOTH packed layouts in memory), and
+    `uses_v1_pack` is reported False so L2 releases the qfp/scale buffers that
+    fed the repack — the last resident copy of them was the 3.335 GB M10
+    measured on 8B.
     """
 
     name = "w4.auto"
@@ -133,6 +148,9 @@ class W4AutoBackend(_BackendBase):
         if self._marlin is None or self.CROSSOVER_M >= 1:
             self._v1 = W4V1Backend(qfp, scale, group_size, in_features,
                                    out_features, act_scale)
+        self.uses_v1_pack = self._v1 is not None
+        if not self.uses_v1_pack:
+            self.qfp = self.scale = None
 
     def usable(self, in_features, out_features, group_size) -> bool:
         return W4V1Backend.usable(self, in_features, out_features, group_size)
@@ -152,9 +170,10 @@ class W4AutoBackend(_BackendBase):
         return self._marlin.linear(x)
 
     def memory_bytes(self) -> int:
-        base = self._v1.memory_bytes() if self._v1 else 0
-        return base + (self._marlin.memory_bytes() - base // 2 if self._marlin
-                       else 0)
+        # each child reports only its own copy; the two coexist exactly when
+        # both were built (a nonzero CROSSOVER_M, or Marlin being unusable)
+        return ((self._v1.memory_bytes() if self._v1 else 0)
+                + (self._marlin.memory_bytes() if self._marlin else 0))
 
 
 def get_backend(name: str, qfp, scale, group_size, in_features, out_features,

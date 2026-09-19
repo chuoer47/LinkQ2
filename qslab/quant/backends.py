@@ -30,6 +30,9 @@ class QuantBackend(Protocol):
     name: str
     #: bits per weight
     bits: int
+    #: False once the backend repacked into its own layout and no longer reads
+    #: the v1 pack; L2 (W4Linear) releases its qfp/scale buffers on this flag
+    uses_v1_pack: bool = True
     #: whether this backend is usable for the given linear shape
     def usable(self, in_features: int, out_features: int, group_size: int) -> bool: ...
 
@@ -38,5 +41,5 @@ class QuantBackend(Protocol):
         ...
 
     def memory_bytes(self) -> int:
-        """On-device weight footprint (packed form, incl. any extra copies)."""
+        """On-device weight footprint, counting only the copies kept resident."""
         ...

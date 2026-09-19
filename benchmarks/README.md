@@ -46,6 +46,7 @@ export CUDAHOSTCXX=$CONDA_PREFIX/bin/x86_64-conda-linux-gnu-g++
 | 动态 γ 只裁不涨（8B natural，γ 上限 4） | 0.91× → 1.00–1.18×（mean 1.07×）；回升分支证伪 | results/m10_draft_sweep.txt |
 | T>0 概率比接受的吞吐税（1.7B，ngram copy） | 3.06× → 2.68×（+12.4%）；lookahead natural 0.62→0.00 acc | results/m10_spec_temperature.txt |
 | 前缀缓存 8B TTFT（M10 重跑） | 555.9→62.3ms（8.92×，fp16 权重口径） | results/m9_prefix_cache.txt |
-| Marlin 路径双份 int4 常驻（8B 死重量） | 3.335 GB ≈ KV 池 +220% | results/m10_w4_residency.txt |
+| Marlin 路径双份 int4 常驻（8B 死重量） | 3.335 GB；**已释放**（后端 `uses_v1_pack`）→ 8B 常驻 6.674→3.339 GB，0.52×→**0.26×** fp16 | results/m10_w4_residency.txt |
+| ↳ 腾出的字节折成 KV 池（8B @util=0.6） | 1.52→3.16 GB（**实测 +108%**；此前按"字节直接进池"估的 +220% 不成立，池只兑现预算的 ~51%） | 同上 |
 | KV4 PPL 代价 | +0.369 | results/m8_kv4_ppl.json |
 | W4 kernel 三方 | M≥8 Marlin 碾压 | results/m5_kernel_bench.json |

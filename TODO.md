@@ -58,8 +58,11 @@
    `results/m10_w4_residency.txt`，1.7B 死重量 0.677 GB（+15% KV 池）、8B
    **3.335 GB**（1.52→4.85 GB，可换出约 2.1 万 → 6.6 万 token 总容量）。口算
    低了近一倍，已更正。**注意**：`w4.auto` 与 `w4.marlin` 逐列相同——省不掉
-   这一份是 Marlin 后端本身的性质，与 dispatch 策略无关。释放 `qfp/scale`
-   的改动**尚未实现**，底稿只证明空间存在。
+   这一份是 Marlin 后端本身的性质，与 dispatch 策略无关。同日该改动**已实现并
+   复测**（后端 `uses_v1_pack` + `W4Linear` 按需注册 buffer）：8B 常驻
+   6.674→3.339 GB（0.52×→0.26× fp16），"只有走 `w4.v1` 才省得下"随之作废；
+   而 "+220% / 4.85 GB" 的换算也错了——腾出的字节进的是分配预算
+   （2.94→6.14 GiB），池子只兑现其中 ~51%，实测 1.52→**3.16 GB（+108%）**。
 
 > **缺环 1–6 于 2026-09-19 全部闭合**（底稿：`results/m10_w4_residency.txt`、
 > `m10_draft_sweep.txt`、`m10_spec_temperature.txt`，以及追加 8B 段的
@@ -100,5 +103,10 @@
 - [ ] **新认账的产品限制（非缺环）**：T>0 时免费提案器（ngram/lookahead）全线劣于同配置
       greedy，只有 draft 勉强守在 1.0× 附近 → 温度解码建议 γ≤2 或直接关投机。已写入
       `benchmarks/06-spec-draft/README.md`，README/docs 同步
-- [ ] **未实现的优化**：`w4.auto`/`w4.marlin` 的 v1 pack 死重量（8B 3.335 GB）可在装换后
-      释放 `qfp/scale`，底稿只证明了空间存在，改动未做
+- [x] **释放 v1 pack 死重量**（原"未实现的优化"）：后端新增 `uses_v1_pack`，
+      Marlin repack 后丢 `qfp/scale`，`W4Linear` 只在需要时注册这两个 buffer，
+      `W4Linear.to()` 的设备推导改成不依赖"一定有 buffer"。实测 8B 常驻
+      6.674→3.339 GB、KV 池 1.52→3.16 GB（+108%，不是估的 +220%）；1.7B graph
+      decode 同运行内 `w4.auto`≡`w4.marlin`（≤0.6%），省显存没付速度。PPL 未复测
+      （`_B/_s` 逐字节不变）。全量测试 84/84（新增 3 条 CPU 常驻契约测试）。
+      底稿同一文件新增复测 + 点测两节

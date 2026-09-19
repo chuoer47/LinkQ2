@@ -57,10 +57,10 @@ def test_generate_with_w4_and_int4_kv():
         # one packed copy = int4 nibbles plus per-group fp16 scales
         packed = (m.in_features * m.out_features // 2
                   + m.in_features // m.group_size * m.out_features * 2)
-        # w4.auto keeps a second copy next to it — the Marlin repack, live
-        # alongside the v1 buffers since M9 made Marlin the mainline — and
-        # even doubled it stays under the fp16 weight it replaces
-        assert m.weight_memory_bytes() <= 2 * packed
+        # Marlin's repack is the same size as the v1 pack and *replaces* it —
+        # holding both was measured at 3.335 GB of dead weight on 8B, so stay
+        # within rounding of one copy
+        assert m.weight_memory_bytes() <= packed * 1.02
         assert m.weight_memory_bytes() < m.in_features * m.out_features * 2
         # the embeddings and lm_head stay fp16, so the whole model is not 1/4
         assert llm.weight_memory_bytes() < 2_400_000_000

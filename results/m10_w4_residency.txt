@@ -58,5 +58,79 @@ w4.auto        252      3.335      3.336   0.002     6.674    0.52x    3.335
    是权重口径不是整模型口径。各行 `v1 pack` 相同、`repack` 略高（Marlin 的
    scale 排布多占），符合预期。
 5. **口径说明**：`dead v1` 列是实测字节；"if freed" 的 KV pool 是对这些字节
-   的算术换算，对应的是一次**尚未实现**的改动（Marlin 完成 repack 后释放
-   `qfp/scale`）。本底稿只证明这笔空间存在且可观，不证明改后无副作用。
+   的算术换算，对应的是一次**当时尚未实现**的改动（Marlin 完成 repack 后释放
+   `qfp/scale`）。本底稿只证明这笔空间存在且可观，不证明改后无副作用。改动已于
+   同日落地，复测见最后一节——那里同时纠正了这条换算本身的一个错误。
+
+## 2026-09-19 复测：释放落地之后（同一脚本、同一 GPU1、同一 util）
+
+改动：`W4MarlinBackend` 在 repack 之后把 `qfp/scale` 置 None 并声明
+`uses_v1_pack = False`；`W4Linear` 据此**不再把 v1 pack 注册成 buffer**，
+`memory_bytes()` 改为只算各自实际常驻的那一份。`w4.auto` 在
+`CROSSOVER_M = 0` 下 `uses_v1_pack` 为假，于是主线也走同一条释放路径。
+`W4Linear.to()` 原先从"第一个 buffer 的设备"推导目标设备，而一个没有
+AWQ scale 的纯 Marlin 层现在一个 buffer 都没有，故改为优先取已搬运的
+buffer、否则从 `to()` 的入参里取设备（`tests/test_unit_cpu.py` 里
+`test_buffer_free_layer_survives_to` 盯这条）。
+
+$ CUDA_VISIBLE_DEVICES=1 python benchmarks/02-w4-quant/bench_w4_residency.py
+=== W4 weight residency: models/Qwen3-1.7B (models/Qwen3-1.7B-qslab-w4-awq2) ===
+backend      lines    v1 pack     repack     act  resident  vs fp16   dead v1
+w4.auto        196      0.000      0.677   0.001     0.678    0.26x    0.000
+            (GB) KV pool ... @util=0.5: 4.73 GB -> 4.73 GB if the dead v1 pack were freed (+0%)
+w4.marlin      196      0.000      0.677   0.001     0.678    0.26x    0.000
+            (GB) KV pool ... @util=0.5: 4.72 GB -> 4.72 GB if the dead v1 pack were freed (+0%)
+w4.v1          196      0.677      0.000   0.001     0.678    0.26x    0.000
+            (GB) KV pool ... @util=0.5: 4.74 GB -> 4.74 GB if the dead v1 pack were freed (+0%)
+
+$ CUDA_VISIBLE_DEVICES=1 MODEL=models/Qwen3-8B W4=models/Qwen3-8B-qslab-w4-awq \
+  BACKENDS=w4.auto UTIL=0.6 python benchmarks/02-w4-quant/bench_w4_residency.py
+backend      lines    v1 pack     repack     act  resident  vs fp16   dead v1
+w4.auto        252      0.000      3.336   0.002     3.339    0.26x    0.000
+            (GB) KV pool ... @util=0.6: 3.16 GB -> 3.16 GB if the dead v1 pack were freed (+0%)
+[kvalloc] 改动前：util=0.6 used_by_others=0.53 peak=10.64 current=9.02 budget=2.94GiB
+[kvalloc] 改动后：util=0.6 used_by_others=0.67 peak=7.30  current=5.69 budget=6.14GiB
+
+## 复测读数
+
+1. **死重量归零**：`v1 pack` 与 `dead v1` 两列在 `w4.auto`/`w4.marlin` 上均为
+   0.000，`resident` 1.7B 1.355→0.678 GB、8B 6.674→3.339 GB，`vs fp16` 从
+   0.52× 降到 **0.26×**。这推翻了原读数 1 的结论"想省掉只有走 `w4.v1`，代价
+   是 decode 慢一半以上"：现在 Marlin 主线与 `w4.v1` 同宽（0.678 GB 逐列相同），
+   不需要用速度换空间。
+2. **原来的 "+220% → 4.85 GB" 换算是错的**，错在把腾出的字节直接加到 KV pool
+   上。实测是加到**分配预算**上：8B budget 2.94→6.14 GiB（+3.20 GiB ≈ 3.335 GB，
+   对得上），而 pool 两次都只拿到 budget 的 ~51%（1.52/2.94 与 3.16/6.14 同比例），
+   所以 pool 实际 1.52→**3.16 GB（+108%）**。按原第 3 条同一 block 口径外推，
+   token 总容量 ≈2.1 万→**≈4.4 万**。为什么 pool 只兑现预算的一半没有查证——
+   `[kvalloc]` 里 peak/current 与 block 取整都会吃掉另一半，此处**未证**，只记
+   录实测比例。1.7B 上 4.41→4.73 GB（+7%），与"+15%"的旧估算同为高估。
+3. **`w4.v1` 行仍持有 pack（0.677 GB）**：释放是按 `uses_v1_pack` 条件发生的，
+   不是无脑删 buffer。
+4. **数值路径未动**：`_B/_s` 与改动前逐字节相同（同一段 repack 代码，只是事后
+   释放引用），故 PPL 未复测；全量测试 84/84 通过（3 条新增的 CPU 常驻契约测试
+   + 原有 e2e 贪心前缀断言）守住数值面。
+
+## 吞吐点测（同一次改动，1.7B graph decode，GPU1，util=0.5，TOKENS=256）
+
+$ CUDA_VISIBLE_DEVICES=1 MODEL=models/Qwen3-1.7B W4=models/Qwen3-1.7B-qslab-w4-awq2 \
+  UTIL=0.5 TOKENS=256 GAMMA=4 python -u benchmarks/05-spec-ngram/bench_spec_ngram.py
+type     spec     tok/s  tok/step  steps
+copy     off      178.8      1.00    255      <- w4.auto（释放后）
+copy     offM     179.4      1.00    255      <- w4.marlin
+copy     on       388.6      2.45    104   x2.17 (vs marlin base)
+natural  off      178.8      1.00    255
+natural  offM     179.0      1.00    255
+natural  on       364.0      2.28    112   x2.03
+random   off      171.4      1.00    255
+random   offM     170.3      1.00    255
+random   on       207.0      1.35    189   x1.22
+
+1. **释放不减速度**：`w4.auto` 与 `w4.marlin` 三个提示家族逐行相等
+   （178.8/179.4、178.8/179.0、171.4/170.3，差 ≤0.6% 且方向不一致）——这正是
+   `CROSSOVER_M=0` 下该有的样子，说明省下的 0.677 GB 没有以 decode 速度付款。
+2. **绝对值不可跨会话比**：这里 178.8 tok/s 与 M9 记录的 1.7B Marlin 155.2 不同，
+   口径差异（util、池大小、机器上其他人的负载）未逐项对齐，**未证**；本次只用于
+   同一次运行内 auto vs marlin 的对照。
+3. `spec on` 三行顺带确认投机路径在改动后仍工作（x2.17 / x2.03 / x1.22，与
+   `benchmarks/05-spec-ngram/README.md` 记录的形状一致）。
