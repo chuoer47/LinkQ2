@@ -30,7 +30,7 @@ export CUDAHOSTCXX=$CONDA_PREFIX/bin/x86_64-conda-linux-gnu-g++
 | `03-kv4-quality/` | PPL 主线 + KV4 代价（HF 模拟法） | M0-M4/M8 | bench_ppl, bench_ppl_kv |
 | `04-runtime-m8/` | 8B 四方矩阵 + paged 验收 + runtime PPL | M4/M7/M8 | bench_engine_matrix, m7_acceptance, bench_ppl_runtime |
 | `05-spec-ngram/` | n-gram 投机（新 runtime） | M9 | bench_spec_ngram |
-| `06-spec-draft/` | draft 投机 + 概率比接受的温度代价 | M9/M10 | bench_spec_draft, bench_spec_temperature |
+| `06-spec-draft/` | draft 投机 + 概率比接受的温度代价 + 动态 γ 扫参 | M9/M10 | bench_spec_draft, bench_spec_temperature, bench_spec_adaptive_tune |
 | `07-prefix-cache/` | 前缀缓存 TTFT | M9 | bench_prefix_cache |
 | `archive-legacy/` | 旧引擎 spec bench（M3/M6 口径） | M3/M6 | bench_spec, bench_spec_modes |
 
@@ -43,7 +43,8 @@ export CUDAHOSTCXX=$CONDA_PREFIX/bin/x86_64-conda-linux-gnu-g++
 | n-gram 复读 γ=4 | 310.4 tok/s（3.19×） | results/m9_spec_8b.txt |
 | draft γ=8 复读（融合后） | 225.1 tok/s（2.30×） | results/m9_gamma_sweep_draft.txt |
 | draft γ=2 自然（融合后） | 114.4 tok/s（1.17×）；M10 复测 116.5，γ≥3 全在 1.0× 噪声带 | results/m9_draft_fused.txt + m10_draft_sweep.txt |
-| 动态 γ 只裁不涨（8B natural，γ 上限 4） | 0.91× → 1.00–1.18×（mean 1.07×）；回升分支证伪 | results/m10_draft_sweep.txt |
+| 动态 γ 只裁不涨（8B natural，γ 上限 4） | 钉上限 0.98×[0.90,1.05] vs 棘轮 1.06×[1.01,1.14]（n=5 重测；M10 原表 0.91→1.07 的因果读法已撤）；回升分支证伪 | results/m10_draft_sweep.txt + m10_adaptive_tune.txt |
+| ↳ 动态 γ 的两个先验扫参 | 落点是唯一决定性轴：级联/阶梯/一步到 1 一律 0.79–0.83×；WINDOW 缩到 1/2 在 copy 上 −27%/−24%（误触发），W≥3 十次抽取从不触发；**裁窗口不省时间**（步价只有 21.5/16.3ms 两档）⇒ 代码不改，空间在早停 | results/m10_adaptive_tune.txt |
 | T>0 概率比接受的吞吐税（1.7B，ngram copy） | 3.06× → 2.68×（+12.4%）；lookahead natural 0.62→0.00 acc | results/m10_spec_temperature.txt |
 | 前缀缓存 8B TTFT（M10 重跑） | 555.9→62.3ms（8.92×，fp16 权重口径） | results/m9_prefix_cache.txt |
 | Marlin 路径双份 int4 常驻（8B 死重量） | 3.335 GB；**已释放**（后端 `uses_v1_pack`）→ 8B 常驻 6.674→3.339 GB，0.52×→**0.26×** fp16 | results/m10_w4_residency.txt |

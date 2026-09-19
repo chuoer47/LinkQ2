@@ -18,7 +18,7 @@ falsified hypotheses kept), current best numbers, known limitations, doc map.
 |---|---|---|
 | W4A16 + KV4 decode (new runtime + Marlin) | **97.2** | 1.75× over the engine's own FP16 |
 | + n-gram speculation (γ=4, repetitive) | **310.4** | 3.19×; greedy-only, see caveat below |
-| + draft model (γ=2, natural text) | 116.5 | ~1.19×; M10 reproduced this cell, γ≥3 sits in a noise band |
+| + draft model (γ=2, natural text) | 116.5 | 1.19× single-run; **n=5 repeat: 1.08×, band [1.02, 1.17]** — and pinning γ=2 costs the repetitive family 13% (1.61× vs 1.85×), which is why the shipped config is γ=4 + shrink-only window |
 | prefix cache hit (3800-tok prefix) | TTFT **62.3 ms** | 8.92× vs cold (M10 re-run; matches the 09-18 verbal 63.0 ms within 1.1%) |
 | W4 mainline weight residency (8B) | **3.34 GB** = 0.26× fp16 | Marlin's repack *replaces* the v1 pack; M10 released the 3.335 GB dead copy → KV pool 1.52→3.16 GB (+108%, measured — the earlier "+220%" assumed freed bytes land 1:1 in the pool, they don't) |
 
@@ -75,7 +75,8 @@ while not eng.is_finished():
 qslab/api/        L4 facade: LLM / SamplingParams / CLI (wraps the runtime below)
 qslab/runtime/    the current engine (paged int4 KV, continuous batching, CUDA Graph,
                   n-gram / lookahead / draft speculation + adaptive gamma
-                  (a one-way ratchet: the window shrinks, it never grows back), prefix cache)
+                  (a one-way ratchet that only trims the proposal list — it cannot yet
+                  save a draft forward, so its upside is structurally capped), prefix cache)
 qslab/kernels/    CUDA kernels (w4a16 GEMV, vendored Marlin) + Triton paged decode
 qslab/quant/      packing format, W4 backends (v1/marlin/auto), quantizer, calibrators
 qslab/models/     Qwen3 backbone + W4Linear (used by the legacy engine path)
@@ -84,6 +85,6 @@ benchmarks/       evidence chains by topic (each dir: README + scripts)
 results/          raw result files (evidence; not regenerated)
 docs/             ARCHITECTURE.md (entry) + archive/ (historical designs)
 notes/            milestone write-ups M0..M9 with raw numbers
-tests/            pytest suite (43 non-e2e + 38 e2e, 81 total, all green)
+tests/            pytest suite (47 non-e2e + 38 e2e, 85 total, all green)
 TODO.md           evidence-chain gaps (all six closed by 09-19) + remaining functional work
 ```

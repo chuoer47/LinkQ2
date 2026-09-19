@@ -31,9 +31,10 @@ class Scheduler:
             # "draft": the engine owns the proposer (it needs a second runtime)
             self.proposer = None
         # acceptance counters for the last generate() (facade stats), and the
-        # adaptive draft window. Only worth adapting for a proposer that spends
-        # a forward per draft — the lookups are free, so shrinking their window
-        # would only lose accepted tokens.
+        # adaptive draft window. Gated to the draft proposer: a lookup proposal
+        # costs a CPU dict hit, so cutting its window could only throw tokens
+        # away, whereas the draft has a (currently unrealized, see _adapt_gamma)
+        # saving to aim at.
         self._spec = {"steps": 0, "proposals": 0, "accepted": 0, "committed": 0}
         self.adaptive_gamma = (config.spec_adaptive_gamma
                                and config.spec_method == "draft")
@@ -218,27 +219,43 @@ class Scheduler:
     def _adapt_gamma(self):
         """Shrink-only: the window can be cut, never bought back.
 
-        Growing past spec_num_drafts is out of reach anyway — M is baked into
-        the verify CUDA-graph family, so the configured gamma *is* the ceiling
-        and adaptation may only spend fewer draft forwards. Growing *back* after
-        a cut is technically possible and deliberately not done: acceptance is
-        prefix-based, so a round that lands both of two drafts says nothing
-        about whether a third or fourth would, and the controller would be
-        guessing. Measured on 8B natural over 4 repeats per policy (M10,
-        results/m10_draft_sweep.txt): holding the halved window gave 1.00–1.18×
-        (mean 1.07×), while a regrow rule (``avg >= proposal_gamma - 0.1``)
-        swung 0.90–1.11× (mean 0.98×) and spent more repeats below 1.0×. The
-        same prompt with adaptation switched off and the window pinned at the
-        ceiling gave 0.91×, so the halved window is what pays.
+        Rule: mean accept length over the last 3 verify rounds <= 1.0 moves the
+        window to gamma//2, once. Both numbers were M6 priors carried in
+        untouched until the 2026-09-19 sweep (results/m10_adaptive_tune.txt)
+        tried to beat them and could not. WINDOW is not a reaction-speed knob
+        but a **false-positive filter on an action that cannot be undone**:
+        gamma//2 is idempotent, so the only thing W changes is *when* the one
+        cut lands — and W=1/2 let a single unlucky 1-of-4 round cut a copy run
+        that was 76% accepted, costing 24-27% of its throughput, while W=4/6
+        bought nothing on natural and merely delayed the cut. Every landing
+        point below gamma//2 (halve relative to the current window, step down
+        one slot at a time, go straight to 1) measured 20-25% under the shipped
+        cell with bands tight enough to be certain.
 
-        Note what this *replaces*: the ported branch read ``avg >= self.gamma
-        - 0.1``, which is unreachable by definition once a halve has happened —
-        ``avg`` tops out at the window currently in play, never at the ceiling.
-        So the old code was already a ratchet, just with a dead branch and a
-        hysteresis story attached to it. The measurement above is of the
-        *reachable* spelling; since it lost, the branch is deleted rather than
-        repaired, and `reset_spec_stats` is what hands the full window back to
-        the next request.
+        What a cut does **not** do is save time, and that is a correction to
+        this docstring's earlier claim. The proposer always runs its configured
+        gamma forwards, and the verify graph family stays keyed on
+        M = spec_num_drafts + 1; `_propose` only truncates the list
+        (`cap = min(gamma, proposal_gamma)` in llm_engine.py). Measured: ~21.5
+        ms per verify step at configured gamma=4 however far the window had
+        fallen (4, 2 or 1), against 16.3 ms at configured gamma=2. A runtime cut
+        therefore discards proposals that were already paid for; making the cap
+        real — early-stopping the proposer loop — is the open optimization, and
+        until then this controller has no cost channel to earn its keep. What
+        does survive of the old claim: 1.06x on 8B natural against 0.98x with
+        the window pinned at the ceiling, n=5 each, which is +8% at t=2.5 with
+        no mechanism behind it — read it as trajectory divergence, not as a
+        saving. (M10's larger quoted uplift, 0.91x -> 1.07x, rested on a single
+        no-adaptation run; 0.91x was the low end of a 0.90-1.05 band.)
+
+        Regrow stays measured, falsified and deleted: ``avg >=
+        proposal_gamma - 0.1`` averaged 0.98x with more repeats under 1.0x
+        (results/m10_draft_sweep.txt), and the branch it replaced — ``avg >=
+        self.gamma - 0.1`` — was unreachable by definition, since ``avg`` tops
+        out at the window in play rather than at the ceiling. Growing *past*
+        spec_num_drafts is out of reach too, because M is baked into the graph
+        family, so `reset_spec_stats` is what hands the full window back to the
+        next request.
         """
         recent = list(self._recent)[-3:]
         if not recent:

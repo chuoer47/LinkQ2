@@ -155,13 +155,26 @@ def test_adaptive_gamma_shrinks_and_never_grows_back():
     # acceptance is prefix-based, and a round that lands 2/2 after a halve
     # carries no information about a 3rd or 4th draft. Measured over 4 repeats
     # on 8B natural (M10, results/m10_draft_sweep.txt): holding the halved
-    # window 1.00-1.18x (mean 1.07x), a regrow rule 0.90-1.11x (mean 0.98x),
-    # and the pinned-ceiling no-adaptation run 0.91x.
+    # window 1.00-1.18x, a regrow rule 0.90-1.11x, pinned ceiling no
+    # adaptation 0.91x. The means (1.07x vs 0.98x) are read as trajectory
+    # divergence, not as a saving — a repeat of one cell lands anywhere in
+    # 0.90-1.05 (results/m10_adaptive_tune.txt), and a window cut saves no
+    # time anyway because the proposer loop still runs at configured gamma.
     assert _drive([0.0, 0.0, 0.0, 2.0, 2.0, 2.0])[-1] == 2, "halving is one-way"
     assert _drive([0.0, 0.0, 0.0, 4.0, 4.0, 4.0])[-1] == 2
     # the ceiling is the configured gamma: M is baked into the verify graph
     # family, so adaptation may only spend fewer draft forwards
     assert _drive([4.0] * 6)[-1] == 4
+
+
+def test_adaptive_window_is_a_false_positive_filter():
+    """WINDOW is not a reaction-speed knob — γ//2 is an idempotent target, so a
+    wider window only delays the one irreversible cut. Measured on copy
+    (results/m10_adaptive_tune.txt): a 1-round window fired on a single
+    lone 1-of-4 round and cost 27% of throughput, 2 rounds cost 24%; the
+    shipped 3-round window ignored that same round and never fired in 30 draws."""
+    assert _drive([4.0, 4.0, 1.0])[-1] == 4, "one bad round among three is not a trend"
+    assert _drive([1.0, 1.0, 1.0])[-1] == 2, "three rounds at break-even must cut"
 
 
 def test_adaptive_gamma_never_reaches_zero():
