@@ -133,6 +133,10 @@
     "按 seq_id 摘除"的接口，让断连真的回收算力（现在会继续生成到 token 预算用完）。
 15. **服务面只有 demo 级防护**：无鉴权、`active_requests` 只观测不设闸、无请求超时、
     无队列上限 ⇒ 打满只会排队 + 抢占，不会拒绝。对外暴露之前必须补。
+    另有一条同族边界（本轮在 CPU 上直接驱动 Scheduler 复现）：**单条 prompt 比整个 KV 池还长**时，
+    `can_allocate` 回 -1 会让 prefill 批为空，接着掉进 decode 分支的
+    `scheduler.py:119 assert scheduled_seqs`，抛的是裸 `AssertionError`，
+    不是"这条请求放不下"的可读报错。
 16. **vLLM 对照还缺两格**（M12）：① 8B W4A16↔W4A16——vLLM 加载不了自研
     `qslab_w4_v1` pack，要走 vLLM 侧量化（bitsandbytes / compressed-tensors），这要在
     共享的 `vllm` env 里装新依赖，**属改环境，先问再做**；② int4 KV 在 vLLM 0.11 没有
