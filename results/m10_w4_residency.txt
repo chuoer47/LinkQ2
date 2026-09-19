@@ -1,0 +1,62 @@
+# M10 缺环⑥ — Marlin 路径的双份 int4 常驻：实测底稿
+# 日期 2026-09-19，机器 4090_public GPU1（当时空闲），conda env qslab
+# 脚本 benchmarks/02-w4-quant/bench_w4_residency.py
+
+背景：`w4.auto` 的名字让人以为"按 M 切换后端"只在需要时用一份权重。实际
+`CROSSOVER_M=0`（M9 起 Marlin 为主线），v1 pack 全程闲置。这份底稿把"闲置
+了多少字节、折成 KV pool 是多少"从口算改成实测。
+
+## 1.7B（196 个 Linear，W4A16-AWQ g=128）
+
+$ CUDA_VISIBLE_DEVICES=1 python benchmarks/02-w4-quant/bench_w4_residency.py
+=== W4 weight residency: models/Qwen3-1.7B (models/Qwen3-1.7B-qslab-w4-awq2) ===
+backend      lines    v1 pack     repack     act  resident  vs fp16   dead v1
+[w4] swapped 196 linears from models/Qwen3-1.7B-qslab-w4-awq2 (backend=w4.auto)
+[kvalloc] total=23.53GiB util=0.5 used_by_others=0.44 peak=2.78 current=1.96 budget=8.55GiB block_bytes=7168.0KiB
+[smooth_kv] loaded results/smooth_kv4_qwen3-1.7b.pt: lambda/kscale for 28 layers
+w4.auto        196      0.677      0.677   0.001     1.355    0.52x    0.677
+            (GB) KV pool results/smooth_kv4_qwen3-1.7b.pt @util=0.5: 4.41 GB -> 5.08 GB if the dead v1 pack were freed (+15%)
+[w4] swapped 196 linears from models/Qwen3-1.7B-qslab-w4-awq2 (backend=w4.marlin)
+[kvalloc] total=23.53GiB util=0.5 used_by_others=0.47 peak=2.78 current=1.96 budget=8.51GiB block_bytes=7168.0KiB
+[smooth_kv] loaded results/smooth_kv4_qwen3-1.7b.pt: lambda/kscale for 28 layers
+w4.marlin      196      0.677      0.677   0.001     1.355    0.52x    0.677
+            (GB) KV pool results/smooth_kv4_qwen3-1.7b.pt @util=0.5: 4.39 GB -> 5.07 GB if the dead v1 pack were freed (+15%)
+[w4] swapped 196 linears from models/Qwen3-1.7B-qslab-w4-awq2 (backend=w4.v1)
+[kvalloc] total=23.53GiB util=0.5 used_by_others=0.45 peak=2.11 current=1.29 budget=9.20GiB block_bytes=7168.0KiB
+[smooth_kv] loaded results/smooth_kv4_qwen3-1.7b.pt: lambda/kscale for 28 layers
+w4.v1          196      0.677      0.000   0.001     0.678    0.26x    0.000
+            (GB) KV pool results/smooth_kv4_qwen3-1.7b.pt @util=0.5: 4.74 GB -> 4.74 GB if the dead v1 pack were freed (+0%)
+
+## 8B（252 个 Linear，W4A16-AWQ g=128）
+
+$ CUDA_VISIBLE_DEVICES=1 MODEL=models/Qwen3-8B W4=models/Qwen3-8B-qslab-w4-awq \
+  BACKENDS=w4.auto UTIL=0.6 python benchmarks/02-w4-quant/bench_w4_residency.py
+=== W4 weight residency: models/Qwen3-8B (models/Qwen3-8B-qslab-w4-awq) ===
+backend      lines    v1 pack     repack     act  resident  vs fp16   dead v1
+[w4] swapped 252 linears from models/Qwen3-8B-qslab-w4-awq (backend=w4.auto)
+[kvalloc] total=23.53GiB util=0.6 used_by_others=0.53 peak=10.64 current=9.02 budget=2.94GiB block_bytes=9216.0KiB
+[smooth_kv] loaded results/smooth_kv4_qwen3-8b.pt: lambda/kscale for 36 layers
+w4.auto        252      3.335      3.336   0.002     6.674    0.52x    3.335
+            (GB) KV pool results/smooth_kv4_qwen3-8b.pt @util=0.6: 1.52 GB -> 4.85 GB if the dead v1 pack were freed (+220%)
+
+## 读数
+
+1. **双份常驻与 backend 名字无关**：`w4.auto` 与 `w4.marlin` 两行逐列相同
+   （1.7B 均 1.355 GB，8B 6.674 GB）。多出来的一份不是 hybrid dispatch 的代
+   价，而是 `W4MarlinBackend` 在 `W4Linear` 的 `qfp/scale` buffer 之外另存一
+   份 Marlin 排布的 `_B/_s`（其 `memory_bytes()` 把两者直接相加）。想省掉只
+   有走 `w4.v1`（0.26× fp16），代价是 decode 慢一半以上（M9 结论）。
+2. **死重量**：1.7B 0.677 GB，8B **3.335 GB**。此前口头估的"8B ≈ 1.9 GB"低
+   了近一倍，那次估算是拿单层字节数乘层数得到的，没实际遍历 252 个模块；
+   以本底稿为准。
+3. **折成上下文长度**（8B @util=0.6）：现有池 1.52 GB ÷ `block_bytes=9216KiB`
+   ≈ 161 block × 128 token/block ≈ **2.1 万** token 总容量；腾出 3.335 GB 后
+   4.85 GB ≈ 514 block ≈ **6.6 万** token。1.7B 上是 4.41→5.08 GB（+15%）。
+   也就是说这笔空间在 1.7B 上是锦上添花，在 8B 上直接决定"能不能开长上下
+   文"。
+4. `vs fp16` 列以被替换的 Linear 集合为分母（embed/lm_head 不参与 swap），
+   是权重口径不是整模型口径。各行 `v1 pack` 相同、`repack` 略高（Marlin 的
+   scale 排布多占），符合预期。
+5. **口径说明**：`dead v1` 列是实测字节；"if freed" 的 KV pool 是对这些字节
+   的算术换算，对应的是一次**尚未实现**的改动（Marlin 完成 repack 后释放
+   `qfp/scale`）。本底稿只证明这笔空间存在且可观，不证明改后无副作用。

@@ -149,14 +149,19 @@ def _drive(hist):
     return seen
 
 
-def test_adaptive_gamma_shrinks_then_recovers():
+def test_adaptive_gamma_shrinks_and_never_grows_back():
     assert _drive([0.0, 0.0, 0.0])[-1] == 2, "a window that lands nothing must halve"
+    # Regrowth is deliberately absent, so these drives assert the ratchet:
+    # acceptance is prefix-based, and a round that lands 2/2 after a halve
+    # carries no information about a 3rd or 4th draft. Measured over 4 repeats
+    # on 8B natural (M10, results/m10_draft_sweep.txt): holding the halved
+    # window 1.00-1.18x (mean 1.07x), a regrow rule 0.90-1.11x (mean 0.98x),
+    # and the pinned-ceiling no-adaptation run 0.91x.
+    assert _drive([0.0, 0.0, 0.0, 2.0, 2.0, 2.0])[-1] == 2, "halving is one-way"
+    assert _drive([0.0, 0.0, 0.0, 4.0, 4.0, 4.0])[-1] == 2
     # the ceiling is the configured gamma: M is baked into the verify graph
     # family, so adaptation may only spend fewer draft forwards
-    assert _drive([0.0, 0.0, 0.0, 4.0, 4.0, 4.0])[-1] == 4
-    # between the two thresholds the window holds still — that gap is the
-    # hysteresis that stops it oscillating every step
-    assert _drive([0.0, 0.0, 0.0, 2.0, 2.0, 2.0])[-1] == 2
+    assert _drive([4.0] * 6)[-1] == 4
 
 
 def test_adaptive_gamma_never_reaches_zero():

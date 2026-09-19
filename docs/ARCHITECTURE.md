@@ -40,7 +40,9 @@
 | 8B W4A16KV4 decode（新 runtime + Marlin） | **97.2** | **1.75×**（vs 旧 W4 14.2 → 6.8×） | notes/M9 §三 |
 | 8B W4A16KV4 + n-gram γ=4 复读 | **310.4** | 3.19× | results/m9_spec_8b.txt |
 | 8B W4A16KV4 + draft γ=8 复读（融合后） | 225.1 | 2.30× | results/m9_gamma_sweep_draft.txt |
-| 8B + draft γ=2 自然文本（融合后） | 114.4 | 1.17× | results/m9_draft_fused.txt |
+| 8B + draft γ=2 自然文本（融合后） | 114.4（M10 复测 116.5） | 1.17×；natural 列整体抖动 ±6–9% | results/m9_draft_fused.txt + m10_draft_sweep.txt |
+| 8B + draft γ=4 自然，**开自适应窗口**（只裁不涨） | 98.2–116.1 | 1.00–1.18×（同配置固定窗口 0.91×） | results/m10_draft_sweep.txt |
+| 1.7B + n-gram γ=4 复读，**T=0.7**（概率比接受） | 394.7 | 同格 greedy 449.0 → 少 12.4% | results/m10_spec_temperature.txt |
 | 1.7B 新 runtime FP16 decode | 148.7 | 3.5×（vs M0 42.1） | notes/M8 §五 |
 
 ### 2.2 质量
@@ -52,7 +54,8 @@
 | 权重压缩 | 16G → 2.49G（**6.6×**） | qslab_w4_v1 打包 |
 | KV 显存 | fp16 的 **2×** 节省（池口径）/ 3.5×（序列口径） | notes/M8 §四 |
 | 32K NIAH | fp16 与 KV4 双 100% | results/m2_niah.json + M4 |
-| 前缀缓存 TTFT（3800-token 前缀，8B） | 558.3 → 63.0ms（**8.86×**） | results/m9_prefix_cache.txt |
+| 前缀缓存 TTFT（3800-token 前缀，8B） | 555.9 → 62.3ms（**8.92×**） | results/m9_prefix_cache.txt（M10 重跑；无 W4 开关，fp16 权重需 UTIL=0.9） |
+| Marlin 路径的**双份 int4 常驻** | 8B 死重量 **3.335 GB**（1.52→4.85，**+220%** KV 池）；1.7B 0.677 GB | results/m10_w4_residency.txt（`w4.auto` 与 `w4.marlin` 逐列相同） |
 | CUDA Graph | batch1 6.5×、8 路连续批 1048 tok/s | notes/M8 §五 |
 
 ### 2.3 关键结论（一句话版）
@@ -62,13 +65,30 @@
 3. **KV4 的 PPL 代价 +0.37 可接受**；"逐 token 无损"在 4-bit 是混沌不可达，PPL 才是仪器。
 4. **静态 K scale（SmoothAttention）是 CUDA Graph 可捕获的前提**——写入与数据无关。
 5. **投机推理两 proposer 各有主场**：n-gram 统治复读（3.19×，提案免费）、
-   draft（torch.compile 融合后）统治自然文本（1.17× vs 0.95×）。
+   draft（torch.compile 融合后）补自然文本——但 M10 复测把这份收益收窄到 **γ=2**
+   （1.19×），γ≥3 一律回到 ≈1.0× 的噪声带里，所以"draft 统治自然文本"是**薄**结论。
 6. **bs=1 时 kernel 数是税不是字节**：W4 draft 步时不改（2241 kernel/步），
    融合（torch.compile）才是正解，4.53→2.59ms。
 7. **批处理下单条输出漂移不是缺陷**：cuBLAS 换 tiling，HF 同样漂移——对比必须同批口径。
 8. **投机一旦服务温度采样，正确性判据就从 token 变成分布**：概率比接受 +
    `norm(max(0,q-p))` 重采样使输出与目标模型同分布（N=20000、T=0.9 时 TV<0.06，
    同代码对照组 q≠p 的 TV>0.3 证明该检验有功效）；greedy 是它 p=one-hot 的退化情形。
+   **但这件事有价签**：T=0.7 时免费提案器全线劣化（ngram copy 3.06→2.68×、
+   lookahead natural acc 0.62→0.00 即 tok/step 退化到 1.00），税来自**接受率塌**而不是
+   那份 float32 提案分布（one-hot 路径根本不分配，peak 5.66→5.67 GB）。
+   **结论：投机目前是 greedy 场景的功能**；要温度解码就 γ≤2 或关投机。
+9. **窗口控制器是单向棘轮**：接受判据是**最长前缀**，一轮落在 2/2 对"第 3、4 条会不会被
+   接受"零信息，所以"高接受率就把窗口涨回去"读的是噪声——实测回升 0.90–1.11×（mean 0.98×）
+   劣于只裁不涨 1.00–1.18×（mean 1.07×），回升分支已回退、数据保留。顺带一条诚实注脚：被删
+   的那条分支阈值对着 **γ 上限**写，折半后按定义不可达，所以旧代码**事实上**早就是棘轮——
+   本次只是把这个事实从意外变成交代（代码/测试/文档三处一致）。要回收窗口需要
+   **逐位置**接受率，不是逐序列标量。
+10. **只要走 Marlin 就多常驻一份 int4**：8B 3.335 GB（=KV 池 +220%），与 dispatch 策略无关
+    （`w4.auto` 与 `w4.marlin` 逐列相同）；M9 把主线换成 Marlin 时这笔就进账了。目前只证明
+    空间存在，**释放动作未实现**。
+11. **评投机不要用带随机字的 prompt**：随机家族在 T=0.7 出现过 3.3×/3.8× 的"高潮"，探针
+    证明该温度下模型退化成周期为 1 的重复 token（56/64 个同一 id），任何提案器都能命中——
+    测到的是轨迹形状，不是提案质量。
 
 ---
 
@@ -251,7 +271,8 @@ LLMEngine.step()
 
 M9 之后主线够快但不够"全"：L4 门面还挂在旧引擎上、温度>0 的序列投机时静默退化成
 普通 decode、旧引擎的 lookahead/dynamic 两模式未迁移、8B+draft 只有 bench 没有测试。
-本里程碑收掉全部功能遗留（**不产新性能数字**，产的是可达性与正确性）。
+本里程碑收掉全部功能遗留（**本身不产性能数字**，产的是可达性与正确性；数字在下一节
+"M10 续"）。
 
 **① L4 门面接到 runtime**
 - `api/llm.py`：`LLM(model, w4=, smooth_kv=, spec=, spec_gamma=, draft=, **Config)` 包
@@ -284,9 +305,17 @@ M9 之后主线够快但不够"全"：L4 门面还挂在旧引擎上、温度>0 
 - `runtime/ngram.py::LookaheadProposer`：逐序列持久索引 + 链式延伸（在上一步提案的
   延续里继续找）+ **首次出现优先**（n-gram 是最后出现优先）——同一 prompt 两种查表
   策略给出不同提案，这是设计差异不是 bug。
-- `Scheduler._adapt_gamma`：WINDOW=3 滑动均值，≥γ-0.1 回升、≤1.0 折半、中间保持（滞回
-  防抖），钳在 `[1, spec_gamma]`。**只裁提案条数、不重建 verify 图族**：M=γ+1 已烤进
-  `graphs_verify`，所以动态上限就是配置上限。
+- `Scheduler._adapt_gamma`：WINDOW=3 滑动均值，**≤1.0 折半、其他一律保持**（单向棘轮），
+  下限 1、上限即 `config.spec_num_drafts`。**只裁提案条数、不重建 verify 图族**：
+  M=γ+1 已烤进 `graphs_verify`，所以动态上限就是配置上限。
+  ⚠ 旧引擎 M6 版还带一条回升判据，但写的是 `avg >= self.gamma - 0.1`——`avg` 的上限就是
+  **当前窗口**，折半后永远到不了 γ-0.1，所以那条回升**按定义不可达**：老代码其实已经是棘轮，
+  只是挂着死分支和一段不成立的"滞回防抖"说辞。M10 把它改成可达写法（对着 `proposal_gamma`）
+  在 8B 上复测：回升 0.90–1.11×（mean 0.98×） vs 只裁不涨 1.00–1.18×（mean 1.07×）——
+  **证伪，于是删除死分支而不是修复它**。
+  机制：接受是**最长前缀**判据，落在 2/2 的一轮对"第 3、4 条会不会被接受"零信息，
+  回升读的是噪声（底稿 `results/m10_draft_sweep.txt`，测试
+  `test_adaptive_gamma_shrinks_and_never_grows_back`）。
 - 只对"按条付费"的 proposer 有意义：ngram/lookahead 提案是 CPU 查表，多提不花钱，
   所以开关对它们不生效（有测试锁住这条）。
 
@@ -295,11 +324,32 @@ M9 之后主线够快但不够"全"：L4 门面还挂在旧引擎上、温度>0 
   draft `0.9`、`max_num_seqs=4`（比单模型用例的 0.82 低，正是共卡的代价）。
   断言结构：步数、提交数、`spec_stats` 自洽、平均 ≥2.0 tok/步——不比 token。实跑通过。
 
+### M10 续 — 证据链补测（2026-09-19）
+
+M10 本体只补功能，于是留下三处"口算/口录/从未测"。本轮把它们全部落到 `results/`，
+TODO 的 6 条缺环一次结清：
+
+| 测什么 | 脚本 | 底稿 | 一句话结论 |
+|---|---|---|---|
+| draft γ 扫描可复现性 | `06-spec-draft/bench_spec_draft.py` | `m10_draft_sweep.txt` | copy 六格 ±0.6% 复现；natural ±6–9% 是 4-bit 贪心混沌，非代码差异 |
+| 动态 γ 三策略对照 | 同上（`ADAPTIVE`） | 同上 | 只裁不涨 1.07× > 回升 0.98× ≈ 固定窗口 0.91× → 回升证伪、回退 |
+| T>0 概率比接受的税 | `06-spec-draft/bench_spec_temperature.py` | `m10_spec_temperature.txt` | +12.4%（ngram copy）到 +63.0%（lookahead copy）；来源是接受率塌，不是 float32 分布 |
+| Marlin 路径双份 int4 | `02-w4-quant/bench_w4_residency.py` | `m10_w4_residency.txt` | 8B 死重量 **3.335 GB**（口算 1.9 GB 低近一倍）；`w4.auto`≡`w4.marlin` |
+| 8B 前缀缓存 | `07-prefix-cache/bench_prefix_cache.py` | `m9_prefix_cache.txt`（追加） | 555.9→62.3ms（8.92×），与口录差 0.4%/1.1% |
+
+**方法学收获（比数字更值钱）**：① 一次非单调（natural tok/step γ=3 1.97→γ=4 1.91）
+**没找到解释就写"未证"**，不编故事；② 随机提示家族在 T=0.7 冒出的 3.3×/3.8× 用一次性探针
+证伪（模型退化为周期 1 的重复 token），这类"好得可疑"的格子必须探针复核；③ 我自己的第一版
+读数是"T>0 就该换 draft"，数据出来发现 natural@T=0.7 三种提案器全输（0.95/0.89/0.70×），
+底稿上传前改判。
+
 ### 测试现状（locks）
 
-非 e2e 43 + e2e 38（含 8B 3、门面 6、投机接受律 7）= **81 全绿**（2026-09-18 全量实跑）。
-相比 M9（61）净增 20：接受律/自适应 γ 7 + lookahead 查表 4（快门档）、门面 6、
-spec runtime 温度路径 2、8B+draft 1。
+非 e2e 43 + e2e 38（含 8B 3、门面 6、投机接受律 7）= **81 全绿**
+（2026-09-18 首次全量；09-19 因 `_adapt_gamma` 定稿 + 棘轮断言改名**重跑全量，81/81 通过**，
+单卡串行）。相比 M9（61）净增 20：接受律/自适应 γ 7 + lookahead 查表 4（快门档）、门面 6、
+spec runtime 温度路径 2、8B+draft 1。自适应那条断言现在锁的是**单向棘轮**
+（`test_adaptive_gamma_shrinks_and_never_grows_back`），别再按"能涨回去"写测试。
 断言口径：**不逐 token 断言量化输出**（混沌），断言数学结构（接受机制/分布/步数/确定性/
 首位 token/前缀稳定性）。pytest: `pytest tests/ -m "not e2e"` 快门（秒级）/
 全量单卡串行 **3min24s**（81 只，2026-09-18 实测）。
@@ -308,16 +358,25 @@ spec runtime 温度路径 2、8B+draft 1。
 
 ## 5. 已知限制与下一步
 
-M10 收掉了原 1-5 号功能遗留（门面 / 温度投机 / 动态 γ / lookahead 迁移 / 8B+draft 测试）。
-剩下的是"没测过的"和"没做的"：
+M10 收掉了原 1-5 号功能遗留（门面 / 温度投机 / 动态 γ / lookahead 迁移 / 8B+draft 测试），
+其补测轮（2026-09-19）把 6 条证据链缺环全部落盘。下面这些不是"没测过"，而是**测出来的
+结构性限制**，加两件确实没做的事：
 
-1. **温度投机有正确性证据、无吞吐证据**：概率比路径每步多一份 `[bs·(γ+1), V]`
-   float32 提案分布 + 一次 softmax，加速比从未实测（见 TODO 4）。
-2. **动态 γ 的阈值仍是旧引擎 M6 的先验**，新 runtime 上没扫过参；且 γ_max 锁死在
-   `spec_gamma`——想越到更大窗口就得为新 M 再录一族 verify 图（见 TODO 5）。
-3. **`w4.auto` 每层驻留两份 int4**：`W4Linear` 的 v1 打包缓冲 + Marlin repack，
-   各 ~0.26× fp16，合计 **0.52× fp16**（2048×2048 层实测 4,325,376 vs 8,388,608 字节）。
-   repack 完成后 v1 缓冲本可释放，M9 把 Marlin 转正时没做这一步。
+1. **温度投机目前是净亏**：概率比接受在分布上无损（TV<0.06），但吞吐税实测
+   +12.4%（ngram copy）到 +63.0%（lookahead copy），natural 上三种提案器 T=0.7 全部
+   ≤1.0×（0.95/0.89/0.70）。**税不在 float32 提案分布，在接受率塌**。所以"投机"当前
+   只在 greedy 场景成立；温度解码要么 γ≤2 要么关投机。要救回来需要**逐位置**接受率信号
+   （`results/m10_spec_temperature.txt`）。
+2. **窗口控制器上限是结构性的**：`_adapt_gamma` 只能在 `[1, spec_num_drafts]` 里裁，
+   因为 verify 图族按固定 M=γ+1 捕获——越过配置值要为每个新 M 再录一族图，没做。
+   而且 WINDOW=3 与"折半"系数至今**没扫过参**（只裁不涨这件事被验证了，阈值本身仍是
+   M6 先验）。回升分支已证伪回退，别再往回加（`results/m10_draft_sweep.txt`）。
+3. **只要走 Marlin 就多常驻一份 int4**：`W4Linear` 的 v1 打包缓冲 + Marlin repack
+   各 ~0.26× fp16，合计 **0.52× fp16**；repack 完成后 v1 缓冲本可释放，M9 把 Marlin
+   转正时没做。M10 量到真实引擎上的死重量：**8B 3.335 GB**（KV 池 1.52→4.85，+220%；
+   换 token 容量约 2.1 万→6.6 万），1.7B 0.677 GB（+15%）。`w4.auto` 与 `w4.marlin`
+   **逐列相同**——这是后端性质不是 dispatch 选择。**释放动作仍未实现**，底稿只证明空间
+   存在（`results/m10_w4_residency.txt`）。
 4. **128K YaRN demo 未跑**（M4 起遗留）。
 5. **旧 `qslab/engine/spec/` 仍在库**：lookahead/dynamic 的逻辑 M10 已迁进 runtime，
    旧包留作冻结 oracle 参照，等旧引擎整体归档时一并处置。

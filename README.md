@@ -17,9 +17,16 @@ falsified hypotheses kept), current best numbers, known limitations, doc map.
 | | tok/s | note |
 |---|---|---|
 | W4A16 + KV4 decode (new runtime + Marlin) | **97.2** | 1.75× over the engine's own FP16 |
-| + n-gram speculation (γ=4, repetitive) | **310.4** | 3.19×; token-identical to plain greedy |
-| + draft model (γ=2, natural text) | 114.4 | 1.17×; n-gram owns repetitive, draft owns natural |
-| prefix cache hit (3800-tok prefix) | TTFT **63.0 ms** | 8.86× vs cold |
+| + n-gram speculation (γ=4, repetitive) | **310.4** | 3.19×; greedy-only, see caveat below |
+| + draft model (γ=2, natural text) | 116.5 | ~1.19×; M10 reproduced this cell, γ≥3 sits in a noise band |
+| prefix cache hit (3800-tok prefix) | TTFT **62.3 ms** | 8.92× vs cold (M10 re-run; matches the 09-18 verbal 63.0 ms within 1.1%) |
+| Marlin path's dead int4 copy (8B) | **3.335 GB** | ≈ +220% of the KV pool; freeing it is *not* implemented |
+
+> **Speculation numbers are greedy.** At `temperature>0` acceptance runs on the Leviathan
+> ratio rule, which is distribution-lossless but changes the game: n-gram on repetitive text
+> drops 3.06×→2.68× and lookahead on natural text loses everything (acceptance 0.62→0.00,
+> tok/step → 1.00). Only the draft model holds ≈1.0×. Measured in
+> `results/m10_spec_temperature.txt` — use γ≤2, or no speculation, when sampling.
 
 Quality: W4 PPL +1.24, KV4 PPL +0.369 (WikiText-2); weights 16G→2.5G (6.6×);
 32K needle-in-a-haystack 100% for both FP16 and KV4.
@@ -67,7 +74,8 @@ while not eng.is_finished():
 ```
 qslab/api/        L4 facade: LLM / SamplingParams / CLI (wraps the runtime below)
 qslab/runtime/    the current engine (paged int4 KV, continuous batching, CUDA Graph,
-                  n-gram / lookahead / draft speculation + adaptive gamma, prefix cache)
+                  n-gram / lookahead / draft speculation + adaptive gamma
+                  (a one-way ratchet: the window shrinks, it never grows back), prefix cache)
 qslab/kernels/    CUDA kernels (w4a16 GEMV, vendored Marlin) + Triton paged decode
 qslab/quant/      packing format, W4 backends (v1/marlin/auto), quantizer, calibrators
 qslab/models/     Qwen3 backbone + W4Linear (used by the legacy engine path)
@@ -77,5 +85,5 @@ results/          raw result files (evidence; not regenerated)
 docs/             ARCHITECTURE.md (entry) + archive/ (historical designs)
 notes/            milestone write-ups M0..M9 with raw numbers
 tests/            pytest suite (43 non-e2e + 38 e2e, 81 total, all green)
-TODO.md           evidence-chain gaps + remaining work
+TODO.md           evidence-chain gaps (all six closed by 09-19) + remaining functional work
 ```

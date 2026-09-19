@@ -216,22 +216,35 @@ class Scheduler:
         self.proposal_gamma = self.gamma
 
     def _adapt_gamma(self):
-        """Ported from the frozen DynamicMode, clamped to the captured window.
+        """Shrink-only: the window can be cut, never bought back.
 
-        Growing past spec_num_drafts is not on the table: M is baked into the
-        verify CUDA-graph family, so the configured gamma *is* the ceiling and
-        adaptation can only spend fewer draft forwards. Near-full acceptance
-        restores the whole window, a round that lands nothing halves it, and
-        anything in between holds still — that gap is the hysteresis that keeps
-        the window from oscillating every step.
+        Growing past spec_num_drafts is out of reach anyway — M is baked into
+        the verify CUDA-graph family, so the configured gamma *is* the ceiling
+        and adaptation may only spend fewer draft forwards. Growing *back* after
+        a cut is technically possible and deliberately not done: acceptance is
+        prefix-based, so a round that lands both of two drafts says nothing
+        about whether a third or fourth would, and the controller would be
+        guessing. Measured on 8B natural over 4 repeats per policy (M10,
+        results/m10_draft_sweep.txt): holding the halved window gave 1.00–1.18×
+        (mean 1.07×), while a regrow rule (``avg >= proposal_gamma - 0.1``)
+        swung 0.90–1.11× (mean 0.98×) and spent more repeats below 1.0×. The
+        same prompt with adaptation switched off and the window pinned at the
+        ceiling gave 0.91×, so the halved window is what pays.
+
+        Note what this *replaces*: the ported branch read ``avg >= self.gamma
+        - 0.1``, which is unreachable by definition once a halve has happened —
+        ``avg`` tops out at the window currently in play, never at the ceiling.
+        So the old code was already a ratchet, just with a dead branch and a
+        hysteresis story attached to it. The measurement above is of the
+        *reachable* spelling; since it lost, the branch is deleted rather than
+        repaired, and `reset_spec_stats` is what hands the full window back to
+        the next request.
         """
         recent = list(self._recent)[-3:]
         if not recent:
             return
         avg = sum(recent) / len(recent)
-        if avg >= self.gamma - 0.1:
-            self.proposal_gamma = self.gamma
-        elif avg <= 1.0:
+        if avg <= 1.0:
             self.proposal_gamma = max(1, self.gamma // 2)
 
     def postprocess(self, seqs: list[Sequence], token_ids: list[int], is_prefill: bool):

@@ -197,8 +197,9 @@ R0-R6 全部完成。仓库从"按里程碑堆叠的研究代码"变为五层分
       所以既有 15 个 spec/draft e2e 测试一字未改照常绿
 - [x] **lookahead 迁移**：`runtime/ngram.py::LookaheadProposer`（逐序列持久索引 +
       链式延伸 + 首次出现优先，对照 n-gram 的最后出现优先）；
-      **动态 γ**：`Scheduler._adapt_gamma`（WINDOW=3、均值 ≤1.0 折半 / ≥γ-0.1 回升、
-      钳在 [1, spec_gamma]；只裁提案条数，不重建 M=γ+1 的 verify 图族）
+      **动态 γ**：`Scheduler._adapt_gamma`（WINDOW=3、近期均值 ≤1.0 就把窗口折半，
+      **只裁不涨**；上限就是 `config.spec_num_drafts`，因为 verify 图族按固定 M=γ+1
+      捕获，只裁提案条数、不重建图族。回升分支曾被接回来复测、量出来更差，见下节）
 - [x] **8B+draft e2e 固化**：`test_8b_acceptance.py::test_8b_draft_spec_acceptance`
       （一卡两完整 runtime 两 int4 池，util 0.62/0.9，断言步数/提交/spec_stats 自洽）
 - [x] 新增测试 20 只（接受律 7 含 TV<0.06 无偏性 + 功效对照组、门面 6、lookahead 4、
@@ -214,3 +215,53 @@ R0-R6 全部完成。仓库从"按里程碑堆叠的研究代码"变为五层分
       （repack 后 v1 缓冲未释放）——见 ARCHITECTURE §5 与 TODO 4/5
 - 说明：M10 不产性能数字（无新 bench），故未建 notes/M10；教训与结论落在本文与
       ARCHITECTURE §4 M10
+
+### M10 续：证据链补测（2026-09-19 完成，缺环 1–6 全部闭合）
+
+M10 本体不产性能数字，留下三处"口算/口录/从未测"。本轮把它们全部变成底稿，
+并把 TODO 的 6 条缺环一次结清。
+
+- [x] **①`w4.auto` 双份 int4 常驻**（原口算"8B ≈ 1.9 GB"）：**实测 3.335 GB**，
+      口算低了近一倍，已更正。`benchmarks/02-w4-quant/bench_w4_residency.py` +
+      `results/m10_w4_residency.txt`。1.7B 死重量 0.677 GB（KV 池 4.41→5.08，+15%）、
+      8B 3.335 GB（**1.52→4.85，+220%**；可换出总容量约 2.1 万→6.6 万 token）。
+      更深一层：**`w4.auto` 与 `w4.marlin` 逐列相同**——省不掉这一份是 Marlin 后端自身的
+      性质（另存 `_B/_s` 排布），与 dispatch 策略无关；M9 把主线换成 Marlin 时就一起进来了。
+      释放 `qfp/scale` 的改动**未实现**，底稿只证明空间存在。
+- [x] **②8B 前缀缓存落盘**：重跑 cold 555.9ms → hit 62.3ms（**8.92×**），与 M9 口录的
+      558.3/63.0 差 0.4%/1.1%，两段原始输出（含命令与 `[kvalloc]` 行）追加进
+      `results/m9_prefix_cache.txt`。新记两条此前没写清的事实：bench **无 W4 开关**（8B 走
+      fp16 权重），且需 `UTIL=0.9` 才放得下（`peak=16.91GiB`，KV 池只剩 3.69GiB）。
+- [x] **③draft bench 入库**：`benchmarks/06-spec-draft/bench_spec_draft.py` +
+      `results/m10_draft_sweep.txt`。**copy 列六格在 ±0.6% 内复现** m9_draft_fused.txt
+      （最大 184.1→183.4）；natural 列抖动 ±6–9%（γ=3 98.0→103.9、γ=4 97.5→89.0）——
+      这是 4-bit 贪心的混沌轨迹，不是代码差异，故 natural 只读成"γ≥3 在 ≈1.0× 噪声带里"，
+      γ=3→γ=4 的 tok/step 非单调（1.97→1.91）**未解释、标为未证**。
+      顺带修正 README/PROGRESS 里的"draft 统治自然文本"：M10 复测下这份收益只到 **γ=2**。
+- [x] **④温度投机的吞吐税**：`bench_spec_temperature.py` + `results/m10_spec_temperature.txt`。
+      **归因纠正**：税**不是**每步那份 `[bs·(γ+1), V]` float32 提案分布（lookup 类提案 one-hot，
+      走不到分配，peak 5.66→5.67 GB），**而是接受率塌了**——T>0 时"逐位等于贪心前缀"不再成立：
+      ngram copy 3.06→2.68×（+12.4%）、lookahead copy 3.54→1.31×（+63.0%）、
+      lookahead natural acc 0.62→0.00（tok/step 退化 1.00，等于没投机）、draft copy 1.10→1.05×。
+      随机提示家族上 T=0.7 的 3.3×/3.8× 用一次性探针证明是**轨迹假象**（该温度下输出周期为 1
+      的重复 token，56/64 个 id 195），已从结论剔除 → **口径教训：不要用带随机字的 prompt 评投机**。
+- [x] **⑤动态 γ 阈值在新 runtime 上的行为**：三种策略 × 4 次重复（8B natural，γ 上限 4，
+      逐 verify 步轮询 `scheduler.proposal_gamma`）——
+      固定窗口 0.91× / **只裁不涨 1.00–1.18×（mean 1.07×）** / 回升判据
+      `avg >= proposal_gamma-0.1` 0.90–1.11×（mean 0.98×，4 次里 3 次跌破 1.0）。
+      **回升判据被自己的复测量证伪 → 死分支删除、明确只裁不涨**（falsified 数据保留在底稿；
+      注：HEAD 原写法 `avg >= self.gamma - 0.1` 阈值对着上限，折半后按定义不可达，所以旧代码
+      **事实上**早就是棘轮，只是挂了一段不成立的"滞回防抖"说辞），
+      `tests/test_spec_acceptance.py` 相应改成断言**单向棘轮**
+      （`test_adaptive_gamma_shrinks_and_never_grows_back`）。机制（未证但自洽）：接受是
+      最长前缀判据，一轮落在 2/2 对"第 3、4 条会不会被接受"零信息，回升读的是噪声；
+      真正回收窗口需要**逐位置**接受率，而 `avg` 只是逐序列标量。
+      仍遗留（降级为优化空间，不再算缺环）：WINDOW=3 与折半系数没扫过；窗口能否越过配置值
+      结构上无从验证（verify 图族 M=γ+1 固定）。
+- [x] **⑥复核后不成立的一条**：原 TODO 第 3 项（32K NIAH 无底稿）M10 已判定不成立，本轮维持。
+- ⚠ **环境坑（值得单列）**：只 `export PATH=…/envs/qslab/bin:$PATH` 而不 `conda activate` 时，
+      `CUDA_HOME/CC/CXX` 缺失 → torch 把 marlin 扩展当没编译过、用系统 gcc(>13) 重新 JIT，
+      报 `Ninja is required…` / `cusparse.h: 没有那个文件或目录`，整条 W4 线在加载阶段崩。
+      纯 fp16 脚本感觉不到，所以这个坑只在碰 W4 的 run 上暴露。已写进 `benchmarks/README.md`。
+- 缺环状态：**1–6 全部闭合**。剩余是功能性收尾（128K YaRN demo）与一条未实现的优化
+      （释放 v1 pack 的 3.335 GB）。
