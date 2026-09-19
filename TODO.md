@@ -142,6 +142,22 @@
     共享的 `vllm` env 里装新依赖，**属改环境，先问再做**；② int4 KV 在 vLLM 0.11 没有
     对应物（它最好到 fp8 KV），所以 KV4 的容量收益只能做成"同 util 下池 135,936 vs
     75,808 tokens"这种记账式对照，做不了等精度吞吐对照。
+17. **主模型不给标定文件不会报错，只会静默退化**（写教程 04 章时实测）：
+    `allocate_kv_cache` 把 K 的尺度表开成 `torch.zeros(H, D)`（`model_runner.py:141`），
+    只有 `load_smoothing(path)` 会往里写（`:160-181`，`if not path: return`）；
+    而 store 与 decode 都按 `ks.dim()==2` 走 STATIC_K 分支（`paged_decode.py:183/203`），
+    **没有** per-token 的动态回退。于是 `smooth_kv=None`（`api/cli.py:37`、
+    `api/server.py:291` 的默认值）时解码读出的 K 恒为 0。
+    实测：`LLM("models/Qwen3-1.7B", enforce_eager=True)` 不传 smooth_kv，对
+    " The capital of France is" 贪心 24 token —— 第 1 个 token 与有标定时完全相同
+    （prefill 不读池），第 2 个起塌成 `is is is…`；第 0 层 `max|k_s| = 0.0`。
+    `spec_method="draft"` 那条路有 `assert os.path.exists(calib)`（`llm_engine.py:37`）兜底，
+    主模型这条没有。要么补同一条 assert，要么把 `k_s` 初值改成 1.0 并显式记成"未平滑"档。
+18. **一个全仓零引用的文件**：`qslab/runtime/attention_store.py`（81 行，M8-s1 vendor 时带进来）。
+    它是 `docs/archive/design-m8.md` 追加一节里被实测**推翻**的那版 per-token K 方案 kernel，
+    真正在用的是 `runtime/paged_decode.py` 里的同名 kernel（`runtime/attention.py:26` 从后者 import）。
+    `grep -rn attention_store . --exclude-dir=.git` 只剩 `docs/archive/design-m8.md:96` 一处提及。
+    留着容易把人带偏（本教程初稿就误把它当成了写入路径）。删之前先确认没有外部脚本按路径引用它。
 
 ## M10 已完成（2026-09-18，功能遗留全部落地）
 
