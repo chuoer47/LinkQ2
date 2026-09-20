@@ -22,8 +22,8 @@ from torch import nn
 
 from flash_attn import flash_attn_varlen_func
 
-from qslab.runtime.context import get_context
-from qslab.runtime.paged_decode import (store_kv_quant, paged_attention_decode,
+from qslab.runtime.model.context import get_context
+from qslab.runtime.model.paged_decode import (store_kv_quant, paged_attention_decode,
                                         materialize_kv)
 
 

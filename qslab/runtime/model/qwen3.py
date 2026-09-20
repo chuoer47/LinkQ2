@@ -24,9 +24,9 @@ import torch.nn.functional as F
 from torch import nn
 from transformers import Qwen3Config
 
-from qslab.runtime.primitives import Linear, LMHead, RMSNorm, VocabEmbedding
-from qslab.runtime.attention import PagedAttention
-from qslab.runtime.rotary import get_rope
+from qslab.runtime.model.primitives import Linear, LMHead, RMSNorm, VocabEmbedding
+from qslab.runtime.model.attention import PagedAttention
+from qslab.runtime.model.rotary import get_rope
 
 
 class Qwen3Attention(nn.Module):

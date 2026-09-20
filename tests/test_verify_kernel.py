@@ -15,7 +15,7 @@ import torch
 
 pytestmark = pytest.mark.gpu
 
-from qslab.runtime.paged_decode import (paged_attention_decode,
+from qslab.runtime.model.paged_decode import (paged_attention_decode,
                                         store_kv_quant)
 
 BLOCK = 32          # small blocks so multi-tile paths are exercised cheaply
@@ -209,7 +209,7 @@ def test_materialize_kv_roundtrip():
     vs = torch.zeros(n, hkv, d // V_GROUP, dtype=torch.float16, device="cuda")
     slots = torch.arange(n, dtype=torch.int64, device="cuda")
     store_kv_quant(k, v, (kq, ks), (vq, vs), slots, v_group=V_GROUP)
-    from qslab.runtime.paged_decode import materialize_kv
+    from qslab.runtime.model.paged_decode import materialize_kv
     km, vm = materialize_kv((kq, ks), (vq, vs), slots, v_group=V_GROUP)
     # error bounded by the quantization step: half a step for round-to-nearest
     k_step = ks.float().repeat(n, 1, 1)

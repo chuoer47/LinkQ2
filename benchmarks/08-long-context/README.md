@@ -58,7 +58,7 @@ factor 必须 > 1.0（这个字段只用于外扩，不外缩）。
 ## 显存预算（想复现前先读这段）
 
 KV 池按每 token `36 层 × 8 KV头 × (2·head_dim=256) B = 72 KiB` 计费
-（`qslab/runtime/model_runner.py:123-124`），而 int4 载荷本身只要 36 KiB/token
+（`qslab/runtime/execute/model_runner.py:123-124`），而 int4 载荷本身只要 36 KiB/token
 ⇒ 当前计费约为真值的 2×，多出的一半归属（scales/对齐）**未逐字节拆开验证**。
 后果：128K + 32 生成 ≈ 9.0 GiB 池，`UTIL=0.8` 给到 10.56 GiB，`max_num_seqs=2` 已贴着上限
 （表中"1.2×"就是它）。再往上加长度或并发，要么抬 `UTIL`，要么先修池计费口径。

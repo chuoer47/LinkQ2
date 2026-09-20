@@ -13,7 +13,7 @@ What it measures
 
 Two honesty notes about reproducing the M9 底稿:
   * DraftProposer hardcodes compile=True for the draft runtime
-    (qslab/runtime/draft.py), i.e. the inductor-fused variant is the only one
+    (qslab/runtime/engine/draft.py), i.e. the inductor-fused variant is the only one
     reachable from config now. Rows here are comparable against
     results/m9_draft_fused.txt, NOT against the unfused table in
     results/m9_gamma_sweep_draft.txt (that comparison needs the M9 code).
@@ -43,7 +43,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import torch
 
-from qslab.runtime.llm_engine import LLMEngine
+from qslab.runtime.engine.llm_engine import LLMEngine
 from qslab.runtime.sampling_params import SamplingParams
 
 MODEL = os.environ.get("MODEL", "models/Qwen3-8B")

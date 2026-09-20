@@ -13,7 +13,7 @@ contents (which would indicate cache aliasing).
 import pytest
 import torch
 
-from qslab.runtime.llm_engine import LLMEngine
+from qslab.runtime.engine.llm_engine import LLMEngine
 from qslab.runtime.sampling_params import SamplingParams
 from flash_attn import flash_attn_varlen_func
 

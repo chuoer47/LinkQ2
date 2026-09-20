@@ -19,7 +19,7 @@ drift.
 import pytest
 import torch
 
-from qslab.runtime.llm_engine import LLMEngine
+from qslab.runtime.engine.llm_engine import LLMEngine
 from qslab.runtime.sampling_params import SamplingParams
 
 pytestmark = pytest.mark.e2e

@@ -24,8 +24,8 @@ from collections import deque
 import pytest
 import torch
 
-from qslab.runtime.model_runner import ModelRunner
-from qslab.runtime.scheduler import Scheduler
+from qslab.runtime.execute.model_runner import ModelRunner
+from qslab.runtime.engine.scheduler import Scheduler
 
 V = 64
 N = 20000
@@ -116,7 +116,7 @@ def test_draft_rows_align_with_the_verify_window():
     """Row m of the flattened batch is the decision for drafts[m] — the same
     indexing postprocess_verify walks, so a shift here would accept tokens the
     target never produced."""
-    from qslab.runtime.sequence import Sequence
+    from qslab.runtime.state.sequence import Sequence
     from qslab.runtime.sampling_params import SamplingParams
 
     def s(drafts):

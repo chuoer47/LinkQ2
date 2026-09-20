@@ -43,7 +43,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import torch  # noqa: E402
 
-from qslab.runtime.llm_engine import LLMEngine  # noqa: E402
+from qslab.runtime.engine.llm_engine import LLMEngine  # noqa: E402
 from qslab.runtime.sampling_params import SamplingParams  # noqa: E402
 
 MODEL = os.environ.get("MODEL", "models/Qwen3-1.7B")

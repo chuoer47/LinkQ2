@@ -2,7 +2,7 @@ from collections import deque
 import xxhash
 import numpy as np
 
-from qslab.runtime.sequence import Sequence
+from qslab.runtime.state.sequence import Sequence
 
 
 class Block:

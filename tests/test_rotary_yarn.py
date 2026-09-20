@@ -18,7 +18,7 @@ import os
 import pytest
 import torch
 
-from qslab.runtime.rotary import (RotaryEmbedding, _yarn_attention_factor,
+from qslab.runtime.model.rotary import (RotaryEmbedding, _yarn_attention_factor,
                                   _yarn_inv_freq, get_rope)
 
 pytest.importorskip("transformers")

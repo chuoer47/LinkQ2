@@ -7,9 +7,9 @@ import torch.multiprocessing as mp
 
 from qslab.runtime.config import Config  # noqa: F401
 from qslab.runtime.sampling_params import SamplingParams
-from qslab.runtime.sequence import Sequence
-from qslab.runtime.scheduler import Scheduler
-from qslab.runtime.model_runner import ModelRunner
+from qslab.runtime.state.sequence import Sequence
+from qslab.runtime.engine.scheduler import Scheduler
+from qslab.runtime.execute.model_runner import ModelRunner
 
 
 class LLMEngine:
@@ -31,7 +31,7 @@ class LLMEngine:
             # for the small model — proposals are GPU forwards, so the
             # propose phase lives in step(), not in the scheduler
             import os
-            from qslab.runtime.draft import DraftProposer
+            from qslab.runtime.engine.draft import DraftProposer
             assert config.draft_model, "spec_method='draft' needs draft_model"
             calib = "results/smooth_kv4_" + os.path.basename(config.draft_model).lower() + ".pt"
             assert os.path.exists(calib), f"draft calibration missing: {calib}"

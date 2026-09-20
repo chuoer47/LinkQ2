@@ -133,7 +133,7 @@ R0-R6 全部完成。仓库从"按里程碑堆叠的研究代码"变为五层分
 - [x] M9 方案：docs/design-m9.md（业界依据 vLLM V1 ngram + TGI append-only）
 - [x] L0：decode kernel 通用化 M query（grid (N_Q, bs*M)，因果性=槽位下界，
       M=1 逐指令等价）；对拍/因果性/-1 防护 7 测试
-- [x] L3：`runtime/ngram.py` proposer（numpy 滑窗，纯 CPU）
+- [x] L3：`runtime/engine/ngram.py` proposer（numpy 滑窗，纯 CPU）
 - [x] L4：调度 verify 分支 + `run_verify`（M=γ+1 一次前向）+ greedy 接受 +
       预留/trim 槽位（append-only 回收）+ padding 中立 + (bs,M) graph 族
 - [x] **Marlin crossover 修正**：M5 微基准 crossover=8 被 e2e 推翻
@@ -147,7 +147,7 @@ R0-R6 全部完成。仓库从"按里程碑堆叠的研究代码"变为五层分
 
 ### M9 续：draft-model 投机迁入（2026-09-18 完成）
 
-- [x] `runtime/draft.py`：chained draft（Qwen3-0.6B）= 第二个完整 runtime
+- [x] `runtime/engine/draft.py`：chained draft（Qwen3-0.6B）= 第二个完整 runtime
       （自有 paged int4 池/graph/scheduler，vLLM V1 draft worker 形态）；
       proposer 接口统一 propose_batch，提案阶段上移 engine
 - [x] 锁步协议：sync 截断（draft KV 前缀天然有效）+ prefill + γ 步紧循环
@@ -200,7 +200,7 @@ R0-R6 全部完成。仓库从"按里程碑堆叠的研究代码"变为五层分
       min(1, q/p) 接受、拒绝后从 `norm(max(0,q-p))` 重采样；proposer 接口新增
       `propose_probs`（[bs·(γ+1), V] float32 提案分布）。greedy 行仍走 argmax 最长前缀，
       所以既有 15 个 spec/draft e2e 测试一字未改照常绿
-- [x] **lookahead 迁移**：`runtime/ngram.py::LookaheadProposer`（逐序列持久索引 +
+- [x] **lookahead 迁移**：`runtime/engine/ngram.py::LookaheadProposer`（逐序列持久索引 +
       链式延伸 + 首次出现优先，对照 n-gram 的最后出现优先）；
       **动态 γ**：`Scheduler._adapt_gamma`（WINDOW=3、近期均值 ≤1.0 就把窗口折半，
       **只裁不涨**；上限就是 `config.spec_num_drafts`，因为 verify 图族按固定 M=γ+1

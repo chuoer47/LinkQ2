@@ -51,8 +51,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import torch
 
-from qslab.runtime.llm_engine import LLMEngine
-from qslab.runtime.scheduler import Scheduler
+from qslab.runtime.engine.llm_engine import LLMEngine
+from qslab.runtime.engine.scheduler import Scheduler
 from qslab.runtime.sampling_params import SamplingParams
 
 MODEL = os.environ.get("MODEL", "models/Qwen3-8B")

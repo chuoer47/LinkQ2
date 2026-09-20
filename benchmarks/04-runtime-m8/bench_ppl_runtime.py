@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import torch
 
-from qslab.runtime.llm_engine import LLMEngine
+from qslab.runtime.engine.llm_engine import LLMEngine
 from qslab.runtime.sampling_params import SamplingParams
 
 WINDOW = 1024

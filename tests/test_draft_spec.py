@@ -1,7 +1,7 @@
 """M9: draft-model (Qwen3-0.6B) speculative decoding through the engine.
 
 The draft is a second full runtime (own paged int4 pool + CUDA graphs,
-runtime/draft.py). These tests assert the lockstep protocol's structure:
+runtime/engine/draft.py). These tests assert the lockstep protocol's structure:
 real acceptance on both repetitive and natural text (the draft model's
 advantage over n-gram: it proposes on prose, not just copies), deterministic
 replay, canonical block tables, and draft-sequence cleanup on finish.
@@ -12,7 +12,7 @@ M8 criterion).
 import pytest
 import torch
 
-from qslab.runtime.llm_engine import LLMEngine
+from qslab.runtime.engine.llm_engine import LLMEngine
 from qslab.runtime.sampling_params import SamplingParams
 
 pytestmark = pytest.mark.e2e
@@ -166,7 +166,7 @@ def test_adaptive_gamma_is_off_for_the_free_proposers():
     cfg = Config(MODEL, spec_method="ngram", spec_adaptive_gamma=True,
                  smooth_kv=CALIB)
     cfg.num_kvcache_blocks = 8
-    from qslab.runtime.scheduler import Scheduler
-    from qslab.runtime.sequence import Sequence
+    from qslab.runtime.engine.scheduler import Scheduler
+    from qslab.runtime.state.sequence import Sequence
     Sequence.block_size = cfg.kvcache_block_size
     assert Scheduler(cfg).adaptive_gamma is False

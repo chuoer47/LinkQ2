@@ -57,7 +57,7 @@ def swap_w4(model: nn.Module, packed_dir: str,
     """
     from qslab.models.w4linear import W4Linear
     from qslab.quant.packfmt import load_qslab_w4
-    from qslab.runtime.primitives import Linear as RuntimeLinear
+    from qslab.runtime.model.primitives import Linear as RuntimeLinear
 
     packed_dir = Path(packed_dir)
     config, st, _calib = load_qslab_w4(packed_dir)

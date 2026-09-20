@@ -364,7 +364,7 @@ M9 之后主线够快但不够"全"：L4 门面还挂在旧引擎上、温度>0 
   分布 TV<0.06；同代码对照组（q≠p）TV>0.3，证明这条检验真的有功效。
 
 **③ lookahead + 动态 γ 迁移**
-- `runtime/ngram.py::LookaheadProposer`：逐序列持久索引 + 链式延伸（在上一步提案的
+- `runtime/engine/ngram.py::LookaheadProposer`：逐序列持久索引 + 链式延伸（在上一步提案的
   延续里继续找）+ **首次出现优先**（n-gram 是最后出现优先）——同一 prompt 两种查表
   策略给出不同提案，这是设计差异不是 bug。
 - `Scheduler._adapt_gamma`：WINDOW=3 滑动均值，**≤1.0 折半、其他一律保持**（单向棘轮），

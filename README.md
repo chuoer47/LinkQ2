@@ -98,7 +98,7 @@ Low-level (what the benchmarks and step-level tests use — the facade is a thin
 over this):
 
 ```python
-from qslab.runtime.llm_engine import LLMEngine
+from qslab.runtime.engine.llm_engine import LLMEngine
 from qslab.runtime.sampling_params import SamplingParams
 
 eng = LLMEngine(model="models/Qwen3-8B",

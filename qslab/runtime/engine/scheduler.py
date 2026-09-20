@@ -1,9 +1,9 @@
 from collections import deque
 
 from qslab.runtime.config import Config
-from qslab.runtime.sequence import Sequence, SequenceStatus
-from qslab.runtime.block_manager import BlockManager
-from qslab.runtime.ngram import NGramProposer, LookaheadProposer
+from qslab.runtime.state.sequence import Sequence, SequenceStatus
+from qslab.runtime.state.block_manager import BlockManager
+from qslab.runtime.engine.ngram import NGramProposer, LookaheadProposer
 
 
 class Scheduler:

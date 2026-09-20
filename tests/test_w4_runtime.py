@@ -2,11 +2,11 @@
 
 The packed checkpoints are keyed by HF module name and store the AWQ input
 scale per logical module, which is why the runtime model keeps q/k/v and
-gate/up separate instead of fusing them (see qslab/runtime/qwen3.py).
+gate/up separate instead of fusing them (see qslab/runtime/model/qwen3.py).
 """
 import pytest
 import torch
-from qslab.runtime.llm_engine import LLMEngine
+from qslab.runtime.engine.llm_engine import LLMEngine
 from qslab.runtime.sampling_params import SamplingParams
 
 pytestmark = pytest.mark.e2e
@@ -64,7 +64,7 @@ def test_w4_swaps_every_quantized_linear():
     checkpoint quantized must be replaced."""
     from qslab.models.w4linear import W4Linear
     from qslab.quant.packfmt import load_qslab_w4
-    from qslab.runtime.primitives import Linear as RuntimeLinear
+    from qslab.runtime.model.primitives import Linear as RuntimeLinear
 
     cfg, _, _ = load_qslab_w4(W4)
     expected = len(cfg["quantized_layers"])
