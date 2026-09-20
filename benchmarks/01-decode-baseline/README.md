@@ -14,10 +14,13 @@
 
 ## 复现
 
-```bash
-# 1.7B FP16 旧引擎基线（M0 口径；新 runtime 用 tests/test_runtime_graph.py 路径）
-python benchmarks/01-decode-baseline/bench_throughput.py --model models/Qwen3-1.7B
+两个脚本已于 2026-09-20 随旧引擎从 main 摘除，完整保留在存档分支
+`archive/legacy-engine`（= 标签 `legacy-engine-final` = `8af4b1e`）：
 
-# NIAH（1.7B，旧引擎）
+```bash
+git checkout archive/legacy-engine
+python benchmarks/01-decode-baseline/bench_throughput.py --model models/Qwen3-1.7B
 python benchmarks/01-decode-baseline/bench_niah.py
 ```
+
+新 runtime 的吞吐口径走 `benchmarks/09-batch-throughput/bench_batch.py`。

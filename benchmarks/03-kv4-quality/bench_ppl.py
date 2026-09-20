@@ -17,7 +17,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import torch
 
-from qslab.config import EngineConfig
 from qslab.models.loader import load_reference_model
 from adapters.tokenizer import QwenTokenizerAdapter
 

@@ -1,7 +1,5 @@
-"""L1 quantized KV cache storage: fp16 / int8 / int4 implementations."""
-from qslab.quant.cache.kv_cache import (  # noqa: F401
-    BaseKVCache,
-    FP16KVCache,
-    KV8Cache,
-    KV4Cache,
-)
+"""Dense (non-paged) quantized KV storage: fp16 / int8 / int4 — the
+round-trip accuracy oracle kept by tests/test_gpu_kernels.py.
+
+Re-exports dropped: every caller imports kv_cache by full path.
+"""

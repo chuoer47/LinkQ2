@@ -12,7 +12,13 @@
 
 ## 复现
 
+两个脚本已于 2026-09-20 随旧引擎从 main 摘除，完整保留在存档分支
+`archive/legacy-engine`（= 标签 `legacy-engine-final` = `8af4b1e`）：
+
 ```bash
+git checkout archive/legacy-engine
 python benchmarks/archive-legacy/bench_spec.py
 python benchmarks/archive-legacy/bench_spec_modes.py
 ```
+
+新 runtime 的投机基准在 `benchmarks/05-spec-ngram/` 与 `benchmarks/06-spec-draft/`。
