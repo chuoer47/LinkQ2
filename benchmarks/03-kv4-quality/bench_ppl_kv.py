@@ -138,7 +138,7 @@ def install(model, scheme):
 
 
 if __name__ == "__main__":
-    from qslab.models.loader import load_reference_model
+    from qslab.reference.loader import load_reference_model
     from adapters.tokenizer import QwenTokenizerAdapter
 
     MODEL = os.environ["MODEL"]

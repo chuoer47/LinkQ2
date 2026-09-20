@@ -1,11 +1,12 @@
-"""Model loading: safetensors weights -> torch modules.
+"""HF reference loading: safetensors weights -> fp16 torch modules.
 
-M0 path: build the reference transformers Qwen3 model, then keep its weights
-as the oracle. The loader also exposes a plain state_dict reader that later
-milestones (W4 packing / own format) will build upon.
+The oracle the W4 / KV4 paths are measured against. It does NOT import
+transformers at module level; model construction is delegated to
+adapters.model_builder.
 
-Layering: this module is L2 and does NOT import transformers; model
-construction is delegated to adapters.model_builder (see design-r1.md).
+load_w4_model / args_model_dir / read_safetensors_state_dict below are the
+M1a software path (dequantize back into the reference model) and have no
+caller left in the runtime — see TODO 21 for why they are not just deleted.
 """
 from __future__ import annotations
 
@@ -14,7 +15,7 @@ from pathlib import Path
 
 import torch
 
-from qslab.config import ModelConfig
+from qslab.reference.config import ModelConfig
 
 
 def load_model_config(model_path: Path | str) -> ModelConfig:

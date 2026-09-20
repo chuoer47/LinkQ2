@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import torch
 
-from qslab.models.loader import load_reference_model, load_model_config
+from qslab.reference.loader import load_reference_model, load_model_config
 from qslab.quant.packfmt import save_qslab_w4
 from qslab.quant.w4 import quantize_weight
 

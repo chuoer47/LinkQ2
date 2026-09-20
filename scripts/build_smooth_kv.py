@@ -37,7 +37,7 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from qslab.models.loader import load_reference_model  # noqa: E402
+from qslab.reference.loader import load_reference_model  # noqa: E402
 
 ALPHA = 0.5
 DEFAULT_CALIB = "results/frozen/calib_c4_128x2048.pt"

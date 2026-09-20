@@ -1,9 +1,8 @@
-"""Model architecture config, mirrored from a model's config.json.
+"""Architecture params mirrored from a model's config.json (M0: Qwen3).
 
-The engine/quantization knobs that used to sit next to ModelConfig
-(W4QuantConfig / KVQuantConfig / SpecConfig / EngineConfig) belonged to the
-M0-M7 engine, now on branch archive/legacy-engine. Runtime knobs live in
-qslab/runtime/config.py.
+Runtime knobs (block size, W4 backend, speculation, memory budget) are NOT
+here: they live in qslab/runtime/config.py. This mirror exists so the offline
+reference path can talk about layer shapes without importing transformers.
 """
 from __future__ import annotations
 
@@ -24,4 +23,3 @@ class ModelConfig:
     rope_theta: float
     max_position_embeddings: int
     tie_word_embeddings: bool = False
-

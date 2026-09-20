@@ -43,7 +43,7 @@ def _release(eng):
 
 
 def _hf_logits():
-    from qslab.models.loader import load_reference_model
+    from qslab.reference.loader import load_reference_model
     from adapters.tokenizer import QwenTokenizerAdapter
     tok = QwenTokenizerAdapter(MODEL)
     ref = load_reference_model(MODEL)
