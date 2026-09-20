@@ -190,6 +190,8 @@
     的 `from qslab.runtime.llm_engine import LLMEngine`。
     同类：`docs/STUDY-PATH.md`（挂起项，本次一字未动）里 9 行、
     `qslab/runtime/attention_store.py:7` 的 docstring 里 1 行（挂起项，md5 自证未动）。
+    附带后果：docs/study/tools/ch*.py 的 import 已跟着改，卡片重跑时打印出来的路径会是新分层
+    路径，与正文里记录的旧「实测输出」文本不再一致（数值不变，只有路径行会变）。
 
 ## M10 已完成（2026-09-18，功能遗留全部落地）
 
