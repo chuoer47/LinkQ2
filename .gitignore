@@ -11,6 +11,9 @@ __pycache__/
 .cache/
 .pytest_cache
 
+# docs/study 暂时不入，后续再操作
+docs/study
+
 # results stay tracked, but big intermediate files excluded
 results/**/*.pt
 third_party/cutlass/
