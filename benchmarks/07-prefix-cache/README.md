@@ -19,7 +19,7 @@ M10 重跑与 M9 记录差 0.4% / 1.1%，两段原始输出（含命令与 `[kva
   默认 `UTIL=0.6` 会在分配阶段直接 OOM——想省显存请先看 `02-w4-quant` 的常驻底稿。
 
 背景：M8 发现静默错答 bug（命中前缀只在 int4 池、prefill 不读池），曾禁用；
-M9 物化路线修复后默认开（ENABLE_PREFIX_CACHE=True）。正确性由 tests/test_prefix_cache.py
+M9 物化路线修复后默认开（ENABLE_PREFIX_CACHE=True）。正确性由 tests/runtime/engine/test_prefix_cache.py
 锁定（hit==hit 精确确定、命中确实发生、共享前缀+新后缀、chunked prefill 同路径）。
 
 ## 复现

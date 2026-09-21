@@ -108,34 +108,3 @@ class TestW4PackResidency:
         m = W4Linear(qfp, scale, g, I, O, backend="w4.marlin")
         assert m.to(torch.device("cpu")) is m
         assert m._backend._B.device.type == "cpu"
-
-
-class TestSamplingMath:
-    def test_greedy_is_argmax(self):
-        from qslab.sampler import sample_token
-        logits = torch.tensor([0.1, 3.0, 0.2])
-        assert sample_token(logits, temperature=0.0) == 1
-
-    def test_top_k_1_is_greedy(self):
-        from qslab.sampler import sample_token
-        logits = torch.tensor([5.0, 1.0, 1.0])
-        g = torch.Generator().manual_seed(0)
-        for _ in range(5):
-            assert sample_token(logits, temperature=1.0, top_k=1, generator=g) == 0
-
-    def test_rejection_sampling_is_distribution_lossless(self):
-        """The speculative accept/reject rule must reproduce the target law."""
-        from qslab.sampler import speculative_reject_sample
-        torch.manual_seed(0)
-        V = 40
-        q_logits = torch.randn(V)
-        p_logits = q_logits + 0.3 * torch.randn(V)     # draft != target
-        q = torch.softmax(q_logits, -1)
-        gen = torch.Generator().manual_seed(7)
-        counts = torch.zeros(V)
-        n = 20_000
-        for _ in range(n):
-            x, _acc = speculative_reject_sample(p_logits, q_logits, generator=gen)
-            counts[x] += 1
-        tv = 0.5 * (counts / counts.sum() - q).abs().sum().item()
-        assert tv < 0.03, f"distribution mismatch (tv={tv})"

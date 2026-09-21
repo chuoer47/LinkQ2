@@ -117,7 +117,7 @@ verify"各占多少没拆开，**未证**）。
 
 ## 温度税（M10 实测，缺环④）
 
-T>0 走 Leviathan 概率比接受（分布无损，正确性见 `tests/test_spec_acceptance.py`，
+T>0 走 Leviathan 概率比接受（分布无损，正确性见 `tests/runtime/engine/test_spec_acceptance.py`，
 N=20000 实测 TV<0.06）。代价首次量化（`results/m10_spec_temperature.txt`）：
 
 | 提案器 | 家族 | greedy | T=0.7 | 税 |
@@ -169,7 +169,7 @@ CUDA_VISIBLE_DEVICES=1 GAMMA=2 POLICIES=off REPEATS=5 \
   python -u benchmarks/06-spec-draft/bench_spec_adaptive_tune.py
 
 # 单测（纯 CPU，无模型）：接受律无偏 + 窗口是单向棘轮 + 窗口是误触发滤波器
-python -m pytest tests/test_spec_acceptance.py -q
+python -m pytest tests/runtime/engine/test_spec_acceptance.py -q
 ```
 
 DraftProposer 硬编码 `compile=True`，因此本目录所有表都对应 **融合**构建，

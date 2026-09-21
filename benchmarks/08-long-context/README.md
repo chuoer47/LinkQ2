@@ -36,7 +36,7 @@ TODO 从 M4 起挂着一条"128K YaRN demo 未跑"。M11 去跑之前先撞到�
 
 ## 正确性锁（不靠这份底稿）
 
-YaRN 的实现与 transformers 4.57.6 逐位一致，锁在 `tests/test_rotary_yarn.py`（12 条）：
+YaRN 的实现与 transformers 4.57.6 逐位一致，锁在 `tests/runtime/model/test_rotary_yarn.py`（12 条）：
 `inv_freq` `atol=1e-9`、cos/sin 缓存 `rtol=0, atol=0`、`attention_factor = 0.1·ln(f)+1.0`
 （f=3.2 → 1.1163150809805682）严格相等，位置取 0/1/7/400/5000/20480/40959/131071。
 另有两条**防静默**的锁：① native 路径的 rope 缓存与实现 YaRN 之前**逐位相同**

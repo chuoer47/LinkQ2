@@ -2,7 +2,7 @@
 
 Why this exists (TODO 缺环4): M10 swapped the acceptance rule from "argmax
 equality" to the probability-ratio test so that sampling at T>0 stays
-distribution-lossless. Correctness got a test (tests/test_spec_acceptance.py,
+distribution-lossless. Correctness got a test (tests/runtime/engine/test_spec_acceptance.py,
 empirical distribution, TV < 0.06 at N=20000) but the *throughput* claim was
 never measured. Every verify step at T>0 can now pay
 

@@ -2,7 +2,7 @@
 
 Throughput only. Correctness is covered elsewhere and deliberately not by
 greedy token equality, which is a chaotic criterion at 4-bit KV (see
-tests/test_e2e_engine.py); the 8B generation accuracy is measured as PPL in
+tests/runtime/engine/test_e2e_engine.py); the 8B generation accuracy is measured as PPL in
 benchmarks/bench_ppl_kv.py (+0.369, 16.06 -> 16.43).
 """
 import gc

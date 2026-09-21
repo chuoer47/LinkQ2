@@ -4,7 +4,7 @@
 被测代码：`qslab/api/server.py`（OpenAI 兼容最小面，跑在 aiohttp 上；aiohttp 以
 optional extra `.[serve]` 声明，核心包不引入 web 依赖）。
 底稿：`results/m12_service_smoke.txt`（2026-09-19，GPU1，Qwen3-1.7B fp16 权重 + KV4）。
-测试：`tests/test_api_server.py`（7 条，快档，不占 GPU）。
+测试：`tests/api/test_api_server.py`（7 条，快档，不占 GPU）。
 
 ## 端点
 
@@ -33,7 +33,7 @@ bash /tmp/qsl_run.sh "python -u -m qslab.api.server --model models/Qwen3-1.7B \
 # 等 /health 通了再打（本轮 3 秒）
 bash benchmarks/11-service-surface/smoke.sh
 bash benchmarks/11-service-surface/smoke_concurrency.sh
-python -m pytest tests/test_api_server.py -q                     # 7 passed
+python -m pytest tests/api/test_api_server.py -q                     # 7 passed
 ```
 
 ⚠ 收尾要按 PID 精确 kill。用 `pkill -f qslab.api.server` 会**匹配到发起命令自己的命令行**，

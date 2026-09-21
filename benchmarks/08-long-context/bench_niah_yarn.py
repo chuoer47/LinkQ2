@@ -154,7 +154,7 @@ def release(eng):
     The attention layers hold views into the int4 pool, and exit() only drops
     the runner, so a plain `del eng` leaves the whole pool allocated and the
     second column OOMs during its weight load (observed). This is the same
-    teardown tests/test_draft_spec.py::_release does.
+    teardown tests/runtime/engine/test_draft_spec.py::_release does.
     """
     for layer in eng.model_runner.model.model.layers:
         a = layer.self_attn.attn

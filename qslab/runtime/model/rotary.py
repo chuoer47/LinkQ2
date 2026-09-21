@@ -23,7 +23,7 @@ def _yarn_inv_freq(dim: int, base: float, factor: float,
     """Blend the extrapolated and interpolated inverse frequencies per dim.
 
     Transcribed from transformers' _compute_yarn_parameters so the two agree
-    numerically — tests/test_rotary_yarn.py locks that against the library
+    numerically — tests/runtime/model/test_rotary_yarn.py locks that against the library
     rather than against this file.
     """
     pos_freqs = base ** (torch.arange(0, dim, 2, dtype=torch.float) / dim)
