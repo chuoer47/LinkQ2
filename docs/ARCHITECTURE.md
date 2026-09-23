@@ -3,9 +3,9 @@
 本文只描述**当前代码的架构**：包怎么分层、依赖往哪走、一次生成请求经过哪些文件、两种 4-bit 格式的约定、
 配置面与入口
 
-**本文写作时的代码 commit**：`651e631b65d5ae6bd746fb85e9f310df329156ed`（tests 分层）。
-它前面两刀结构改动也在本文的覆盖范围内：`e6217d2268963ecf7f2131a6cdc6789db77e00c8` 删掉 `qslab/sampler.py`、
-`924c704` 把 runtime 拆成四个子包。本文自身在这个 commit 的下一次提交里。
+**本文写作时的代码 commit**：`53b0bd7dc2c25696b618ef1ae308992bff3f304c`（tests 分层）。
+它前面两刀结构改动也在本文的覆盖范围内：`bb2cd86e213d1af9f209304ac01c332cb722c754` 删掉 `qslab/sampler.py`、
+`ff9cd12` 把 runtime 拆成四个子包。本文自身在这个 commit 的下一次提交里。
 
 **qslab 是什么**：一个单卡 LLM 推理运行时——权重存 int4、算时反量化到 fp16 做 GEMM（W4A16），
 KV cache 也压成 int4（KV4），带分页块管理、前缀缓存、CUDA Graph、连续批处理和投机解码。

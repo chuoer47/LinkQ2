@@ -15,7 +15,7 @@
 ## 复现
 
 两个脚本已于 2026-09-20 随旧引擎从 main 摘除，完整保留在存档分支
-`archive/legacy-engine`（= 标签 `legacy-engine-final` = `8af4b1e`）：
+`archive/legacy-engine`（= 标签 `legacy-engine-final` = `beaa88a`）：
 
 ```bash
 git checkout archive/legacy-engine
