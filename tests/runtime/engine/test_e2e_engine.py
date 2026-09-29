@@ -1,21 +1,4 @@
-"""M8: the runtime reproduces the HF reference at the prefill boundary.
-
-Why not greedy token equality: with a 4-bit KV cache the engine can be
-bit-exact at every step and still diverge once a near-tie meets the rounding
-error, and greedy decoding is chaotic — a single flipped token changes
-everything after it. Measured across 8 prompts, both Qwen3-1.7B and
-Qwen3-8B reproduce HF exactly on 1 of 8, with the first 6-14 tokens agreeing;
-that spread is chaos, not a defect. Perplexity (the project's own metric,
-docs/03) is the right instrument for 4-bit precision, and M7 already fixed
-that number for this cache (paged 18.50 vs dense 18.70).
-
-What this module does assert is the thing that has to be exact: the
-next-token distribution after a full prefill. Prefill never reads the int4
-pool — flash-attn consumes the freshly computed fp16 q/k/v — so agreeing with
-HF here proves the model path (weights, norms, RoPE, slot mapping, block
-tables) is wired correctly, and leaves only the quantization as a source of
-drift.
-"""
+"""The runtime reproduces the HF reference at the prefill boundary."""
 import pytest
 import torch
 
@@ -56,9 +39,8 @@ def _hf_logits():
 
 
 def test_prefill_logits_match_hf():
-    """The int4-calibrated runtime must reproduce HF's next-token logits after
-    a full prefill. SmoothAttention is active here, so this also checks that
-    q*=lambda / k/=lambda cancels exactly."""
+    """The int4-calibrated runtime must reproduce HF's next-token logits after a full
+    prefill."""
     expected = _hf_logits()
     eng = LLMEngine(model=MODEL, max_model_len=4096, max_num_seqs=8,
                     enforce_eager=True, gpu_memory_utilization=0.45,
@@ -93,8 +75,8 @@ def test_prefill_logits_match_hf():
 
 
 def test_kv4_pool_is_int4():
-    """No silent fallback to fp16: the pool must be packed, K's scale must be
-    the static per-channel table, and V's per token group."""
+    """No silent fallback to fp16: the pool must be packed, K's scale must be the static
+    per-channel table."""
     eng = LLMEngine(model=MODEL, max_model_len=4096, max_num_seqs=8,
                     enforce_eager=True, gpu_memory_utilization=0.45,
                     smooth_kv=CALIB)
@@ -112,8 +94,8 @@ def test_kv4_pool_is_int4():
 
 
 def test_generation_is_coherent():
-    """Catches real breakage (garbage, repetition collapse, zero tokens)
-    without depending on a 4-bit cache reproducing a chaotic greedy path."""
+    """Catches real breakage (garbage, repetition collapse, zero tokens) without depending
+    on a 4-bit cache reproducing a chaotic greedy path."""
     eng = LLMEngine(model=MODEL, max_model_len=4096, max_num_seqs=8,
                     enforce_eager=True, gpu_memory_utilization=0.45,
                     smooth_kv=CALIB)

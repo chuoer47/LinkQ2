@@ -1,23 +1,4 @@
-"""How much does the KV4 scheme cost in PPL? Measured on HF directly.
-
-The runtime is not needed to answer this: the scheme is a property of how K
-and V are quantized, not of where they are stored.
-
-  q' = q * lambda,  k' = k / lambda        (SmoothAttention; the pairing
-                                            constraint makes it commute with
-                                            RoPE)
-  k' -> int4 with the calibrated STATIC per-channel scale
-  v  -> int4 per token, grouped along head_dim
-
-The interception point matters: K and Q must be quantized AFTER RoPE, and
-V after its projection (V has no norm or RoPE in Qwen3). K is caught by
-wrapping `apply_rotary_pos_emb`, which is exactly the post-RoPE boundary; a
-hook on k_proj would quantize pre-norm, pre-RoPE values and measure something
-else entirely.
-
-Standard sliding-window PPL (docs/03: window 1024, stride 512, WikiText-2
-raw). Modes: fp16 | kv4 | k4only | v4only.
-"""
+"""How much does the KV4 scheme cost in PPL?"""
 import math
 import os
 import sys

@@ -1,9 +1,4 @@
-"""Architecture params mirrored from a model's config.json (M0: Qwen3).
-
-Runtime knobs (block size, W4 backend, speculation, memory budget) are NOT
-here: they live in qslab/runtime/config.py. This mirror exists so the offline
-reference path can talk about layer shapes without importing transformers.
-"""
+"""Architecture params mirrored from a model's config.json."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -11,7 +6,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class ModelConfig:
-    """Architecture params, loaded from a model's config.json (M0: Qwen3)."""
+    """Architecture params, loaded from a model's config.json."""
     hidden_size: int
     num_hidden_layers: int
     num_attention_heads: int

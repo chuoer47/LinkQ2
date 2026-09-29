@@ -1,20 +1,10 @@
-"""qslab runtime attention: flash-attn prefill + quantized paged decode.
-
-Keeps nano-vllm's structure (global Context set per step by the model runner,
-slot_mapping-driven KV writes) and replaces the decode read path with qslab's
-int4 kernel. The PagedAttention layer owns per-layer views into the runtime's
-quantized KV pool.
-
-Ordering follows nano-vllm: store BEFORE attention. decode's context_lens
-includes the token being processed, so its KV must already sit in its slot
-when the kernel reads the cache.
-
-SmoothAttention (optional, from a calibration file): q *= lambda and
-k /= lambda, applied after RoPE. The attention logits are unchanged, but K's
-per-channel outliers are flattened so a single static int4 scale per channel
-suffices. lambda is per KV head; on the query side it is broadcast across each
-head's GQA group.
-"""
+"""Qslab runtime attention: flash-attn prefill + quantized paged decode."""
+# Ordering follows nano-vllm: store BEFORE attention. decode's context_lens includes the
+#   token being processed, so its KV must already sit in its slot when the kernel reads the
+#   cache.
+# SmoothAttention (optional, from a calibration file): q *= lambda and k /= lambda after
+#   RoPE. The logits are unchanged but K's per-channel outliers flatten, so one static int4
+#   scale per channel suffices. lambda is per KV head and broadcasts over each GQA group.
 from __future__ import annotations
 
 import torch
@@ -28,13 +18,7 @@ from qslab.runtime.model.paged_decode import (store_kv_quant, paged_attention_de
 
 
 class PagedAttention(nn.Module):
-    """One attention layer's interface into the quantized paged KV pool.
-
-    k_cache/v_cache are (packed_u32, scales) tuples for this layer, attached
-    by the model runner's allocate_kv_cache. When k_scale is the static table
-    (shape [H_kv, D]) the K store/dedcode path uses a frozen per-channel
-    scale; otherwise it falls back to a dynamic per-token scale.
-    """
+    """One attention layer's interface into the quantized paged KV pool."""
 
     def __init__(self, num_heads: int, head_dim: int, scale: float,
                  num_kv_heads: int, block_n: int = 128, v_group: int = 64):
@@ -50,15 +34,12 @@ class PagedAttention(nn.Module):
         self.lam_q = None                       # [H_q, D] GQA-expanded
 
     def _materialize_prefix(self, ctx, k, v):
-        """Dequantize the pool-resident prefix of each sequence and prepend
-        it to this batch's freshly computed rows. k/v are [N, H_kv, D] where
-        N covers only the scheduled (new) tokens, ordered by cu_seqlens_q;
-        the returned tensors are ordered by cu_seqlens_k instead (prefix
-        rows first, per sequence), which is what flash-attn consumes.
-
-        The slot plan (prefix_slots + prefix_plan) is computed ONCE per step
-        by prepare_prefill: 28 layers recomputing it with tolist() would pay
-        a GPU sync each, which alone cost more than the saved prefill."""
+        """Dequantize the pool-resident prefix of each sequence and prepend it to this
+        batch's freshly computed rows."""
+        # Returned tensors are ordered by cu_seqlens_k (prefix rows first, per sequence),
+        #   which is what flash-attn consumes, while k/v in are ordered by cu_seqlens_q.
+        # The slot plan is computed ONCE per step by prepare_prefill: recomputing it per
+        #   layer pays a GPU sync each.
         plan = ctx.prefix_plan
         kp, vp = materialize_kv(self.k_cache, self.v_cache, ctx.prefix_slots,
                                 v_group=self.v_group)
@@ -77,10 +58,9 @@ class PagedAttention(nn.Module):
         n_rep = self.num_heads // self.num_kv_heads
         self.lam_q = lam.repeat_interleave(n_rep, dim=0).contiguous()
 
-    # dynamo must not trace this: it reads the global Context (recreated
-    # every step), which would churn guards; with it disabled, torch.compile
-    # graph-breaks here and fuses everything in between — which is the point
-    # of the compiled draft (notes/M9 §6: ~1500 unfused elementwise kernels)
+    # Dynamo must not trace this: it reads the global Context (recreated every step), which
+    #   would churn guards; with it disabled, torch.compile graph-breaks here and fuses
+    #   everything in between — which is the point of the compiled draft
     @torch._dynamo.disable
     def forward(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor):
         ctx = get_context()
@@ -110,13 +90,12 @@ class PagedAttention(nn.Module):
                                v_group=self.v_group)
 
         if ctx.is_prefill:
-            # prefill: attention over the fp16 q/k/v directly (varlen, causal);
-            # the KV has been quantized into slots above for later decode reads.
-            # A prefix-cache hit (or an earlier chunked-prefill block) means
-            # cu_seqlens_k claims a length only the pool holds — flash-attn
-            # would silently attend to misaligned rows (the M8 silent-wrong-
-            # answer bug). Materialize the pool-resident prefix and prepend
-            # it, so the declared lengths finally tell the truth.
+            # prefill: attention over the fp16 q/k/v directly (varlen, causal); the KV has
+            #   been quantized into slots above for later decode reads. A prefix-cache hit
+            #   (or an earlier chunked-prefill block) means cu_seqlens_k claims a length
+            #   only the pool holds — flash-attn would silently attend to misaligned rows.
+            #   Materialize the pool-resident prefix and prepend it, so the declared lengths
+            #   finally tell the truth.
             if ctx.block_tables is not None:
                 k, v = self._materialize_prefix(ctx, k, v)
             o = flash_attn_varlen_func(

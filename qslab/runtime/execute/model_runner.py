@@ -35,11 +35,10 @@ class ModelRunner:
             print(f"[w4] swapped {n} linears from {config.w4} "
                   f"(backend={config.w4_backend})")
         if config.compile:
-            # kernel-fusion lever for the small-model draft (notes/M9 §6):
-            # inductor fuses the ~1500 per-step elementwise/copy kernels;
-            # attention is dynamo-disabled so the global Context never
-            # touches the compiled regions. Compiled during warmup, then
-            # recorded into the CUDA graphs like any other kernels.
+            # kernel-fusion lever for the small-model draft: inductor fuses the ~1500 per-
+            #   step elementwise/copy kernels; attention is dynamo-disabled so the global
+            #   Context never touches the compiled regions. Compiled during warmup, then
+            #   recorded into the CUDA graphs like any other kernels.
             self.model = torch.compile(self.model, dynamic=True,
                                        mode=config.compile_mode or None)
         self.sampler = Sampler()
@@ -102,10 +101,7 @@ class ModelRunner:
         torch.cuda.empty_cache()
 
     def allocate_kv_cache(self):
-        """Allocate the per-layer int4 paged KV pool (qslab M7 layout).
-
-        Per (layer, slot): k_q [D/8] uint32 + k_s fp16, same for V.
-        """
+        """Allocate the per-layer int4 paged KV pool."""
         config = self.config
         hf_config = config.hf_config
         free, total = torch.cuda.mem_get_info()
@@ -158,13 +154,7 @@ class ModelRunner:
         self.load_smoothing(config.smooth_kv)
 
     def load_smoothing(self, path: str | None):
-        """Fold the calibrated SmoothAttention factors into the pool.
-
-        lambda acts as a per-KV-head elementwise weight, so it is not a
-        parameter that can be merged into either norm (those are per-channel,
-        shared across heads) — it is applied in the attention layer instead.
-        kscale becomes the static per-channel scale table.
-        """
+        """Fold the calibrated SmoothAttention factors into the pool."""
         if not path:
             return
         ck = torch.load(path, map_location="cuda", weights_only=False)
@@ -271,13 +261,7 @@ class ModelRunner:
         return input_ids, positions
 
     def prepare_verify(self, seqs: list[Sequence]):
-        """Build the M-row verify batch: [last committed token, drafts...].
-
-        Row m sits at position L-1+m and its KV is stored at that position's
-        slot (the store runs first, inside the attention layer — same
-        store-before-attention ordering as decode). Slots past a sequence's
-        reserved blocks (capped draft windows) get -1 and are skipped.
-        """
+        """Build the M-row verify batch: [last committed token, drafts...]."""
         gamma = self.config.spec_num_drafts
         M = gamma + 1
         input_ids = []
@@ -329,12 +313,7 @@ class ModelRunner:
 
     @staticmethod
     def _flat_drafts(seqs: list[Sequence], M: int):
-        """[bs*M] draft token per verify row, -1 where there is no draft.
-
-        Row m of a sequence verifies drafts[m] (its input is the token at
-        position m-1 of the window), so the bonus row and the padded tail get
-        no proposal and are sampled plainly.
-        """
+        """[bs*M] draft token per verify row, -1 where there is no draft."""
         gamma = M - 1
         flat = []
         for seq in seqs:
@@ -347,33 +326,16 @@ class ModelRunner:
     def rejection_verify(logits: torch.Tensor, temperatures: torch.Tensor,
                          drafts: torch.Tensor, draft_probs: torch.Tensor | None,
                          sampled: torch.Tensor) -> torch.Tensor:
-        """Leviathan probability-ratio acceptance for the temperature rows.
-
-        For a draft token x proposed under distribution p, against the target's
-        q at this row: accept x with probability min(1, q(x)/p(x)); on refusal
-        resample from normalized max(0, q - p). That leaves the target's
-        distribution exactly unchanged (the losslessness proof), and has two
-        consequences this method relies on:
-
-          * an accepted row returns x and a rejected row returns a token that
-            can never be x, so the scheduler's existing "walk while the row
-            equals the draft" prefix loop needs no change of its own;
-          * a deterministic proposal (n-gram lookup, or an argmax draft step)
-            is p = one-hot at x, so p(x) = 1 and the rule becomes "accept x
-            with probability q(x)" while the residual becomes q with x's mass
-            removed — at temperature -> 0 that is exactly the argmax-equality
-            test. A proposer signals one-hot by passing draft_probs=None.
-
-        Rows that are not speculative (draft == -1) and rows whose sequence is
-        greedy keep the plain sample from `sampled` untouched.
-
-        Why greedy stays on its own path: near temperature 0 the softmax
-        saturates, so a clear argmax is decided deterministically — but a
-        near-tie between two logits lands within float error of q(x) < 1 and
-        would turn into a coin flip. That is the same near-tie chaos the M8
-        batch-drift analysis measured, and the existing token-identical
-        losslessness checks must not inherit it.
-        """
+        """Leviathan probability-ratio acceptance, applied to the sampled rows."""
+        # Accept draft x with probability min(1, q(x)/p(x)); on refusal resample from
+        #   normalized max(0, q - p), which leaves the target's distribution exactly
+        #   unchanged.
+        # A rejected row can therefore never return x, so the scheduler's walk-while-row-
+        #   equals-draft prefix loop stays correct for sampled proposals as well as greedy
+        #   ones, where the rule degenerates to an argmax check.
+        # A deterministic proposal signals p = one-hot by passing draft_probs=None.
+        # Greedy rows keep their own argmax path: near temperature 0 a near-tie would land
+        #   within float error of q(x) < 1 and turn the decision into a coin flip.
         out = sampled.clone()
         has_draft = drafts >= 0
         rows = has_draft & (temperatures > 1e-3)
@@ -405,12 +367,7 @@ class ModelRunner:
 
     def run_verify(self, seqs: list[Sequence],
                    draft_probs: torch.Tensor | None = None) -> list[int]:
-        """One verify forward; returns the committed token per row (bs*M).
-
-        `draft_probs` is the [bs*M, V] distribution the proposals were drawn
-        from, for proposers that sample (a draft model). None means every
-        proposal was deterministic, i.e. one-hot.
-        """
+        """One verify forward; returns the committed token per row (bs*M)."""
         gamma = self.config.spec_num_drafts
         M = gamma + 1
         input_ids, positions = self.prepare_verify(seqs)

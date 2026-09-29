@@ -1,14 +1,4 @@
-"""M9: draft-model (Qwen3-0.6B) speculative decoding through the engine.
-
-The draft is a second full runtime (own paged int4 pool + CUDA graphs,
-runtime/engine/draft.py). These tests assert the lockstep protocol's structure:
-real acceptance on both repetitive and natural text (the draft model's
-advantage over n-gram: it proposes on prose, not just copies), deterministic
-replay, canonical block tables, and draft-sequence cleanup on finish.
-
-Not asserted: spec vs non-spec token equality (GEMM M-dim tiling chaos, the
-M8 criterion).
-"""
+"""draft-model (Qwen3-0.6B) speculative decoding through the engine."""
 import pytest
 import torch
 
@@ -127,13 +117,7 @@ def test_draft_multiple_sequences():
 
 
 def test_adaptive_gamma_shrinks_when_proposals_keep_failing():
-    """The migrated DynamicMode policy, wired through the real engine.
-
-    A stubbed proposer keeps the assertion about the window rather than about
-    the draft model's mood: token 0 is one this model never emits (the tests
-    above assert as much), so every round must land nothing and the window must
-    halve — while generation itself stays correct at the shorter window.
-    """
+    """The migrated DynamicMode policy, wired through the real engine."""
     eng = _eng(adaptive=True)
     try:
         assert eng.scheduler.adaptive_gamma, "adaptation is gated on the drafting proposer"
@@ -160,8 +144,8 @@ def test_adaptive_gamma_shrinks_when_proposals_keep_failing():
 
 
 def test_adaptive_gamma_is_off_for_the_free_proposers():
-    """A lookup costs nothing per draft, so halving its window would only drop
-    accepted tokens — the flag is deliberately inert outside draft mode."""
+    """A lookup costs nothing per draft, so halving its window would only drop accepted
+    tokens."""
     from qslab.runtime.config import Config
     cfg = Config(MODEL, spec_method="ngram", spec_adaptive_gamma=True,
                  smooth_kv=CALIB)

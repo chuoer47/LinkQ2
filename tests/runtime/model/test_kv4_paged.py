@@ -1,18 +1,4 @@
-"""M8: quantized paged KV — layout, encoding and decode correctness.
-
-Covers the two bugs that made the whole decode path silently wrong:
-
-  1. nibble encoding. The store writes offset-binary (qi+8); any reader that
-     sign-extends two's-complement instead biases every value by 8*scale.
-     Both directions are checked against a torch reference here.
-
-  2. non-contiguous K/V. v arrives as a slice of the fused qkv projection
-     (row stride = full qkv width, not H*D) and flash-attn tolerates that,
-     so prefill looked fine while every stored row was garbage. The test
-     feeds a strided tensor and requires the same result as a packed one.
-
-Also pins the static-K / dynamic-V split used by the SmoothAttention path.
-"""
+"""Quantized paged KV — layout, encoding and decode correctness."""
 import pytest
 import torch
 
@@ -44,9 +30,7 @@ def _unpack(packed):
 
 
 def test_store_encoding_matches_reference():
-    """Regression: store writes offset-binary (qi+8) and readers must decode
-    the same way. A two's-complement reader biases every value by 8*scale,
-    which is what silently broke the first integration attempt."""
+    """Regression: store writes offset-binary (qi+8) and readers must decode the same way."""
     torch.manual_seed(0)
     T = 12
     k = (torch.randn(T, H_KV, D) * 2).half().to(DEV)
@@ -80,12 +64,7 @@ def test_store_encoding_matches_reference():
 
 
 def test_decode_batched_block_tables():
-    """Batched grid: each sequence reads its own block table and length.
-
-    The tolerance is loose because the dense reference dequantizes the pool
-    once, while the kernel dequantizes per tile, so the quantization error is
-    amplified differently by softmax; this checks routing, not precision.
-    """
+    """Batched grid: each sequence reads its own block table and length."""
     torch.manual_seed(0)
     T1, T2 = 200, 300
     total = T1 + T2

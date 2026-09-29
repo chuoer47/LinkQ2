@@ -1,8 +1,4 @@
-"""M5: three-way kernel benchmark — v1 custom / marlin / cublas fp16.
-
-Real Qwen3-8B shapes, M in {1, 8, 512, 4096}. L2 flush for M<=8 (decode).
-Saves results/m5_kernel_bench.json.
-"""
+"""three-way kernel benchmark — v1 custom / marlin / cublas fp16."""
 import json
 import statistics
 import sys
@@ -30,7 +26,7 @@ G = 128
 
 
 def flush_l2():
-    # 96MB dummy buffer write to evict L2 (72MB on 4090)
+    # the dummy buffer must exceed the GPU's L2 so the timed read below always misses it
     global _flush_buf
     try:
         _flush_buf
@@ -88,5 +84,7 @@ for N, K in SHAPES:
               f"cublas {r['cublas_us']:8.1f}us ({r['cublas_bw_gbs']:6.0f} GB/s)", flush=True)
 
 results["timestamp"] = datetime.now().isoformat()
-Path("results/m5_kernel_bench.json").write_text(json.dumps(results, indent=2))
-print("saved results/m5_kernel_bench.json")
+out = Path("results/m5_kernel_bench.json")
+out.parent.mkdir(parents=True, exist_ok=True)
+out.write_text(json.dumps(results, indent=2))
+print(f"saved {out}")

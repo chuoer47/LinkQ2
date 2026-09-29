@@ -1,17 +1,4 @@
-"""n-gram speculative proposer (vLLM V1 style, CPU-only).
-
-The proposal is a lookup, not a model: take the last n committed tokens as a
-key, find its most recent earlier occurrence in the sequence, and propose the
-tokens that followed it. Repetition is common in real traffic (copy/edit
-tasks, code, summarisation), so this costs zero GPU memory and zero draft
-forward while exploiting exactly that structure. Prompts with no match return
-an empty proposal — the engine then pads the verify batch, which is
-semantically a plain decode step (design-m9 §2, padding neutrality).
-
-Matching is "last occurrence wins" (the most recent context is the best
-predictor), same as vLLM's prompt-lookup. The numpy sliding window is O(L)
-zero-copy per step, which is noise next to a model forward.
-"""
+"""n-gram speculative proposer (vLLM V1 style, CPU-only)."""
 from __future__ import annotations
 
 import numpy as np
@@ -48,25 +35,7 @@ class NGramProposer:
 
 
 class LookaheadProposer(NGramProposer):
-    """Self-speculation with a persistent index and chain extension (M6 mode).
-
-    Migrated from the frozen ``qslab/engine/spec/modes.py`` LookaheadMode, but
-    only the part of it that actually does something:
-
-    * **Chain extension** — after a key hit, the proposal keeps walking the
-      index with the fixed n-window instead of stopping at the end of the
-      matched span. A single hit's contiguous followers are capped by how far
-      they run before the sequence ends, which bites exactly at the large γ
-      where speculation pays (M9 measured γ=8 optimal on repetition); chaining
-      bridges non-contiguous repeats and is the whole reason to prefer this
-      proposer over the plain lookup.
-    * **First occurrence wins**, matching M6 (the plain lookup above takes the
-      most recent hit — a different bet, kept distinct rather than merged).
-
-    NOT ported: M6's longest-key-first ladder. It tried keys of length γ down
-    to 1, but its index only ever holds n-length keys, so every rung except
-    ``take == n`` was unreachable — a no-op the old tests never noticed.
-    """
+    """Self-speculation with a persistent index and chain extension."""
 
     def __init__(self, ngram_size: int, num_drafts: int, span: int = 8):
         super().__init__(ngram_size, num_drafts)

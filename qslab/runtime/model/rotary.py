@@ -1,7 +1,5 @@
-"""qslab runtime rotary embedding — vendored from nano-vllm (MIT), unchanged
-except for the import paths and single-GPU simplifications. YaRN support is
-qslab's own: `rope_scaling` used to be accepted by Qwen3Attention and dropped,
-so nothing in the runtime could address a position past the native ceiling."""
+"""Qslab runtime rotary embedding — vendored from nano-vllm (MIT), unchanged except for the
+import paths and single-GPU simplifications."""
 from __future__ import annotations
 
 import math
@@ -20,12 +18,7 @@ def apply_rotary_emb(x, cos, sin):
 def _yarn_inv_freq(dim: int, base: float, factor: float,
                    original_max_position: int, beta_fast: float = 32.0,
                    beta_slow: float = 1.0, truncate: bool = True):
-    """Blend the extrapolated and interpolated inverse frequencies per dim.
-
-    Transcribed from transformers' _compute_yarn_parameters so the two agree
-    numerically — tests/runtime/model/test_rotary_yarn.py locks that against the library
-    rather than against this file.
-    """
+    """Blend the extrapolated and interpolated inverse frequencies per dim."""
     pos_freqs = base ** (torch.arange(0, dim, 2, dtype=torch.float) / dim)
     inv_extrapolation = 1.0 / pos_freqs
     inv_interpolation = 1.0 / (factor * pos_freqs)
@@ -91,8 +84,8 @@ class RotaryEmbedding(nn.Module):
         else:
             inv_freq = 1.0 / (base ** (torch.arange(0, rotary_dim, 2,
                                                     dtype=torch.float) / rotary_dim))
-            # multiplying by exactly 1.0 is bit-exact, so the unscaled cache is
-            # the cache every other milestone measured
+            # left at exactly 1.0: multiplying the cos/sin table by 1.0 is bit-exact, so the
+            #   unscaled cache is byte-identical to a scaled one
             self.attention_scaling = 1.0
 
         t = torch.arange(max_position_embeddings, dtype=torch.float)

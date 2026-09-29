@@ -16,14 +16,14 @@ class Scheduler:
         self.block_manager = BlockManager(config.num_kvcache_blocks, config.kvcache_block_size)
         self.waiting: deque[Sequence] = deque()
         self.running: deque[Sequence] = deque()
-        # speculative decoding (design-m9): proposals are filled in by the
-        # engine's propose phase; gamma=0 disables the verify path
+        # Speculative decoding: proposals are filled in by the engine's propose phase;
+        #   gamma=0 disables the verify path
         self.gamma = config.spec_num_drafts if config.spec_method else 0
         self.max_model_len = config.max_model_len
         if config.spec_method == "ngram":
             self.proposer = NGramProposer(config.spec_ngram_size, config.spec_num_drafts)
         elif config.spec_method == "lookahead":
-            # M6's self-proposer, migrated: persistent index + chain extension
+            # self-proposer: persistent n-gram index + chain extension
             self.proposer = LookaheadProposer(config.spec_ngram_size,
                                               config.spec_num_drafts,
                                               span=config.spec_lookahead_span)
@@ -127,18 +127,13 @@ class Scheduler:
         self.waiting.appendleft(seq)
 
     def postprocess_verify(self, seqs: list[Sequence], token_ids: list[int]) -> int:
-        """Accept the matched prefix, commit accepted + bonus, trim the table.
-
-        token_ids is the accepted token per verify row (bs*M flattened, row m
-        = the decision for drafts[m]). Acceptance is the longest prefix where
-        the row equals the draft; the row after the last accepted draft
-        contributes the bonus token. The rows come from the ratio rule in
-        ModelRunner.rejection_verify, which on refusal resamples from
-        max(0, q - p) and therefore can never hand back a rejected row's own
-        draft token — that is what makes this plain prefix walk the correct
-        acceptance for sampled proposals as well as greedy ones, where the rule
-        degenerates to the argmax check (Leviathan). Returns tokens committed.
-        """
+        """Accept the matched prefix, commit accepted + bonus, trim the table."""
+        # Acceptance is the longest prefix where the row equals the draft, and the row after
+        #   the last accepted draft contributes the bonus token.
+        # The rows come from the ratio rule in ModelRunner.rejection_verify, which on
+        #   refusal resamples from max(0, q - p) and so can never hand back a rejected row's
+        #   own draft token — that is what makes this plain prefix walk correct for sampled
+        #   and greedy proposals alike.
         M = self.gamma + 1
         committed = 0
         accepted = 0
@@ -175,8 +170,7 @@ class Scheduler:
             seq.num_scheduled_tokens = 0
             seq.spec_drafts = []
             seq.spec_verify = False
-            # trim: restore the canonical table length, releasing rejected
-            # draft blocks (append-only recovery, design-m9 §3)
+            # trim: restore the canonical table length, releasing rejected draft blocks
             while len(seq.block_table) > seq.num_blocks:
                 self.block_manager.release_tail(seq)
             finished = (not seq.ignore_eos and appended and appended[-1] == self.eos) \
@@ -200,12 +194,10 @@ class Scheduler:
 
     @property
     def spec_stats(self) -> dict:
-        """Counters over the verify steps run so far, plus what they mean.
-
-        acceptance_rate = accepted drafts / proposed; mean_len = tokens
-        committed per verify step, i.e. the speedup the window is buying
-        (1.0 means speculation is pure overhead).
-        """
+        """Counters over the verify steps run so far, plus what they mean."""
+        # acceptance_rate = accepted drafts / proposed; mean_len = tokens committed per
+        #   verify step, i.e. the speedup the window buys — 1.0 means speculation is pure
+        #   overhead.
         s = dict(self._spec)
         s["acceptance_rate"] = s["accepted"] / s["proposals"] if s["proposals"] else 0.0
         s["mean_len"] = s["committed"] / s["steps"] if s["steps"] else 0.0
@@ -217,46 +209,17 @@ class Scheduler:
         self.proposal_gamma = self.gamma
 
     def _adapt_gamma(self):
-        """Shrink-only: the window can be cut, never bought back.
-
-        Rule: mean accept length over the last 3 verify rounds <= 1.0 moves the
-        window to gamma//2, once. Both numbers were M6 priors carried in
-        untouched until the 2026-09-19 sweep (results/m10_adaptive_tune.txt)
-        tried to beat them and could not. WINDOW is not a reaction-speed knob
-        but a **false-positive filter on an action that cannot be undone**:
-        gamma//2 is idempotent, so the only thing W changes is *when* the one
-        cut lands — and W=1/2 let a single unlucky 1-of-4 round cut a copy run
-        that was 76% accepted, costing 24-27% of its throughput, while W=4/6
-        bought nothing on natural and merely delayed the cut. Every landing
-        point below gamma//2 (halve relative to the current window, step down
-        one slot at a time, go straight to 1) measured 20-25% under the shipped
-        cell with bands tight enough to be certain.
-
-        What a cut does **not** do is save time, and that is a correction to
-        this docstring's earlier claim. The proposer always runs its configured
-        gamma forwards, and the verify graph family stays keyed on
-        M = spec_num_drafts + 1; `_propose` only truncates the list
-        (`cap = min(gamma, proposal_gamma)` in llm_engine.py). Measured: ~21.5
-        ms per verify step at configured gamma=4 however far the window had
-        fallen (4, 2 or 1), against 16.3 ms at configured gamma=2. A runtime cut
-        therefore discards proposals that were already paid for; making the cap
-        real — early-stopping the proposer loop — is the open optimization, and
-        until then this controller has no cost channel to earn its keep. What
-        does survive of the old claim: 1.06x on 8B natural against 0.98x with
-        the window pinned at the ceiling, n=5 each, which is +8% at t=2.5 with
-        no mechanism behind it — read it as trajectory divergence, not as a
-        saving. (M10's larger quoted uplift, 0.91x -> 1.07x, rested on a single
-        no-adaptation run; 0.91x was the low end of a 0.90-1.05 band.)
-
-        Regrow stays measured, falsified and deleted: ``avg >=
-        proposal_gamma - 0.1`` averaged 0.98x with more repeats under 1.0x
-        (results/m10_draft_sweep.txt), and the branch it replaced — ``avg >=
-        self.gamma - 0.1`` — was unreachable by definition, since ``avg`` tops
-        out at the window in play rather than at the ceiling. Growing *past*
-        spec_num_drafts is out of reach too, because M is baked into the graph
-        family, so `reset_spec_stats` is what hands the full window back to the
-        next request.
-        """
+        """Shrink-only: the window can be cut, never bought back."""
+        # The rule: mean accept length over the last 3 rounds <= 1.0 moves the window to
+        #   gamma//2, once.
+        # WINDOW is not a reaction-speed knob but a false-positive filter on an action that
+        #   cannot be undone — gamma//2 is idempotent, so a wider window only changes when
+        #   the single cut lands.
+        # The verify graph family stays keyed on M = spec_num_drafts + 1 and the proposer
+        #   still runs its full loop, so a runtime cut discards proposals that were already
+        #   paid for.
+        # reset_spec_stats is what hands the full window back to the next request; growing
+        #   past spec_num_drafts is out of reach because the graph family is keyed on it.
         recent = list(self._recent)[-3:]
         if not recent:
             return

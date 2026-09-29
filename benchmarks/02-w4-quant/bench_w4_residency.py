@@ -1,18 +1,4 @@
-"""M10 evidence: what each W4 backend really keeps resident per linear (TODO gap 5).
-
-`w4.auto` dispatches at M > CROSSOVER_M = 0, so the v1 GEMV path is unreachable
-on the main line — yet the v1 pack (`qfp`/`scale` buffers, the source of the
-Marlin repack) used to stay resident next to Marlin's `_B`/`_s`. ARCHITECTURE §5
-recorded that as a fact and left the size as arithmetic. This measures it:
-per-backend byte totals over a genuinely swapped model, so the reclaimable figure
-is a number instead of a guess.
-
-After the release landed (`uses_v1_pack` in qslab/quant/w4_backends.py) the same
-script is the before/after check: `dead v1` must read 0.000 on the Marlin paths
-and their `resident` column must drop to the repack alone.
-
-Env: MODEL, W4 (packed dir), BACKENDS (space-separated), UTIL.
-"""
+"""What each W4 backend really keeps resident per linear."""
 import os
 import sys
 from pathlib import Path

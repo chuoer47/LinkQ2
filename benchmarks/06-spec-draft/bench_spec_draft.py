@@ -1,39 +1,21 @@
-"""M9 draft-model speculation bench, now as a real script (TODO 缺环1).
+"""Draft-model speculation bench: plain-decode baseline plus a gamma sweep over the same
+prompts.
 
-This closes the gap the M9 notes admitted: results/m9_spec_draft.txt,
-m9_gamma_sweep_draft.txt and m9_draft_fused.txt were produced by inline
-snippets, so nothing in the repo could re-run them. Shape follows
-benchmarks/05-spec-ngram/bench_spec_ngram.py (same prompts, same decode-window
-timing, same "never compare by token equality" discipline).
-
-What it measures
-  baseline   plain decode, no speculation, per prompt family
-  sweep      draft-model speculation (Qwen3-0.6B) across gamma, tok/s +
-             tokens committed per verify step + acceptance rate
-
-Two honesty notes about reproducing the M9 底稿:
-  * DraftProposer hardcodes compile=True for the draft runtime
-    (qslab/runtime/engine/draft.py), i.e. the inductor-fused variant is the only one
-    reachable from config now. Rows here are comparable against
-    results/m9_draft_fused.txt, NOT against the unfused table in
-    results/m9_gamma_sweep_draft.txt (that comparison needs the M9 code).
-  * the 2241-kernels/step and CUDA-event breakdowns in the M9 notes came from
-    a profiler run, which this script does not do.
-
-Env:
-  MODEL    target            (default models/Qwen3-8B)
-  W4        packed target    (default models/Qwen3-8B-qslab-w4-awq; "" = fp16)
-  DRAFT    draft model       (default models/Qwen3-0.6B)
-  DRAFT_W4 packed draft dir  (default "" — M9 falsified W4 for the draft:
-             kernel count, not bytes, was the tax)
-  GAMMAS   gamma list        (default "1 2 3 4 6 8")
-  TOKENS   tokens per run    (default 192)
-  TEMPERATURE (default 1e-6 = greedy; see bench_spec_temperature.py for a sweep)
-  ADAPTIVE on/off           (default off; spec_adaptive_gamma only bites the
-             draft proposer, which is the one that pays a forward per proposal)
-  UTIL     target gpu_memory_utilization (default 0.62)
-  DRAFT_UTIL (default 0.9)
-"""
+MODEL         target (default models/Qwen3-8B)
+W4            packed target (default models/Qwen3-8B-qslab-w4-awq; "" = fp16)
+DRAFT         draft model (default models/Qwen3-0.6B)
+DRAFT_W4      packed draft dir (default "")
+GAMMAS        gamma list (default "1 2 3 4 6 8")
+TOKENS        tokens per run (default 192)
+TEMPERATURE   (default "1e-6 = greedy"; see bench_spec_temperature.py for a sweep)
+ADAPTIVE      on/off (default off; spec_adaptive_gamma only bites the draft proposer, which is the one
+                that pays a forward per proposal)
+UTIL          target gpu_memory_utilization (default 0.62)
+DRAFT_UTIL    (default 0.9)"""
+# DraftProposer hardcodes compile=True, so the draft runtime is always the inductor-fused
+#   variant.
+# Never compare runs by token equality: the spec and non-spec paths run different GEMM
+#   shapes.
 import os
 import sys
 from pathlib import Path

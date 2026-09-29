@@ -1,9 +1,4 @@
-"""W4 packed weights driving the paged runtime.
-
-The packed checkpoints are keyed by HF module name and store the AWQ input
-scale per logical module, which is why the runtime model keeps q/k/v and
-gate/up separate instead of fusing them (see qslab/runtime/model/qwen3.py).
-"""
+"""W4 packed weights driving the paged runtime."""
 import pytest
 import torch
 from qslab.runtime.engine.llm_engine import LLMEngine
@@ -38,15 +33,8 @@ def _release(eng):
 
 
 def test_w4_runtime_matches_fp16_reference():
-    """The whole point of the integration: the packed W4 weights drive the
-    paged runtime and still reproduce the fp16 oracle.
-
-    Only a 12-token prefix is asserted: the W4 logits sit ~4.0 from fp16
-    (measured, same order for v1 and Marlin backends, which agree with each
-    other to 0.047), so a near-tie around token 12 flips with any numeric
-    perturbation — the greedy-chaos criterion M8 already retired. The stable
-    prefix still catches any wiring/kernel regression (garbage, wrong
-    weights, broken AWQ fold) immediately."""
+    """The whole point of the integration: the packed W4 weights drive the paged runtime and
+    still reproduce the fp16 oracle."""
     eng = _engine(w4=W4)
     try:
         out = eng.generate([PROMPT], SamplingParams(temperature=1e-6, max_tokens=16),
@@ -60,8 +48,8 @@ def test_w4_runtime_matches_fp16_reference():
 
 
 def test_w4_swaps_every_quantized_linear():
-    """Embeddings, norms and an untied lm_head stay fp16; everything the
-    checkpoint quantized must be replaced."""
+    """Embeddings, norms and an untied lm_head stay fp16; everything the checkpoint
+    quantized must be replaced."""
     from qslab.models.w4linear import W4Linear
     from qslab.quant.packfmt import load_qslab_w4
     from qslab.runtime.model.primitives import Linear as RuntimeLinear

@@ -1,8 +1,5 @@
-"""HF model construction adapter — the ONLY place qslab builds a transformers model.
-
-L2 (qslab.models) must not import transformers; it receives a built module from
-here. This keeps the dependency rule: L2 ← L3 ← L4 ← adapters (HF side).
-"""
+"""HF model construction adapter — the ONLY place qslab builds a transformers model."""
+# L2 (qslab.models) must not import transformers; it receives a built module from here.
 from __future__ import annotations
 
 from pathlib import Path

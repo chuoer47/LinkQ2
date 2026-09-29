@@ -72,8 +72,7 @@ class TestRegistry:
 
 
 class TestW4PackResidency:
-    """A backend that repacks must not keep the source pack alive (M10: the
-    double int4 residency measured 3.335 GB on 8B)."""
+    """A backend that repacks must not keep the source pack alive."""
 
     def _pack(self, O=256, I=1024, g=128):
         torch.manual_seed(3)

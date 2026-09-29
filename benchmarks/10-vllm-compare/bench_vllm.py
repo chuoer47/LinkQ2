@@ -1,45 +1,14 @@
-"""vLLM baseline: what an off-the-shelf engine costs on the same box.
-
-Protocol (deliberately narrow — see benchmarks/10-vllm-compare/README.md)
-----------------------------------------------------------------------
-Same card, same fp16 Qwen3-1.7B checkpoint, same prompt token ids, greedy,
-ignore_eos, 256 output tokens, max_num_seqs=32, gpu_memory_utilization=0.5.
-Throughput is reported BOTH ways: wall (prefill included, the only protocol
-vLLM's offline API exposes) and vLLM's own generated-token count. The
-decode-window column exists only for our runtime (benchmarks/09-batch-throughput).
-
-What this is NOT
-----------------
-* Not a quantization comparison. vLLM 0.11 has AWQ/GPTQ W4A16 kernels but no
-  int4 KV cache at all, and this project's W4 packs are its own
-  `qslab_w4_v1` format (models/*.origin.txt: packed from the local fp16
-  checkpoint), which vLLM cannot load. So the weight-precision-matched cell
-  is fp16 <-> fp16, and KV4 has no counterpart to compare against.
-* Not a kernel comparison. Our Marlin path is vendored from upstream and our
-  paged decode shares ancestry with vLLM's, so a kernel-level win/loss is not
-  what this measures; this measures engine/scheduler/CUDA-graph overhead.
-* No per-token equality checks anywhere: 4-bit greedy is chaotic, the only
-  admissible metrics are PPL / throughput / acceptance rate.
-
-Prompts are rebuilt here with the same RNG (seed 11, randint(1000, 200000) %
-vocab, one per request, cells iterated ascending by bs) as
-bench_batch.py:distinct_prompts, so the two engines see identical token ids.
-
-Env: MODEL TOKENS BATCHES UTIL
-Sampler: VLLM_USE_FLASHINFER_SAMPLER is forced to 0 (see below).
-"""
+"""vLLM baseline: what an off-the-shelf engine costs on the same box."""
 import os
 import random
 import sys
 import time
 from pathlib import Path
 
-# vLLM 0.11 routes top-k/top-p sampling through flashinfer, whose kernels are
-# JIT-compiled at first use and need nvcc. The dedicated `vllm` conda env ships
-# no nvcc and there is no /usr/local/cuda on this box, so engine init dies in
-# profile_run -> _dummy_sampler_run with "Could not find nvcc". The sampler is
-# not what this baseline measures (engine / scheduler / CUDA-graph overhead), so
-# pin vLLM onto its native torch sampler instead of dragging a CUDA toolkit in.
+# The dedicated `vllm` conda env ships no nvcc and there is no /usr/local/cuda on this box,
+#   so engine init dies in profile_run -> _dummy_sampler_run with "Could not find nvcc". The
+#   sampler is not what this baseline measures (engine / scheduler / CUDA-graph overhead),
+#   so pin vLLM onto its native torch sampler instead of dragging a CUDA toolkit in.
 os.environ.setdefault("VLLM_USE_FLASHINFER_SAMPLER", "0")
 
 MODEL = os.environ.get("MODEL", "./models/Qwen3-1.7B")
@@ -63,7 +32,7 @@ def main():
     print(f"=== vllm baseline: {Path(MODEL).name} tokens={N_TOKENS} "
           f"prompt_len={len(body)} util={UTIL} max_num_seqs={max(BATCHES)} ===")
     llm = LLM(model=MODEL, **kw)
-    # vLLM 0.11 exposes the engine config only through the LLMEngine wrapper.
+    # the installed vLLM exposes the engine config only through the LLMEngine wrapper
     vcfg = llm.llm_engine.vllm_config
     mcfg, ccfg = vcfg.model_config, vcfg.cache_config
     print(f"[vllm] py={sys.version.split()[0]} version={__import__('vllm').__version__} "

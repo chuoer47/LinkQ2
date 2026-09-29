@@ -1,10 +1,4 @@
-"""Service surface (qslab.api.server) — fast tier, no GPU, no weights.
-
-The engine is faked: everything under test is the wire contract (routing,
-request validation, SSE framing, usage accounting) and the pump's per-step
-diffing, none of which needs a model. The real-engine path is exercised by the
-smoke run recorded in benchmarks/11-service-surface/README.md.
-"""
+"""Service surface (qslab.api.server) — fast tier, no GPU, no weights."""
 from __future__ import annotations
 
 import asyncio
@@ -190,10 +184,8 @@ def test_two_clients_both_complete(base_url):
 
 
 class GateEngine(FakeEngine):
-    """Blocks inside its first step() so a second submit necessarily arrives
-    while the pump is mid-run — the deterministic version of "the pump does
-    not serialize clients". It says nothing about how the real scheduler
-    batches; that is benchmarks/09's territory."""
+    """Blocks inside its first step() so a second submit necessarily arrives while the pump
+    is mid-run."""
 
     def __init__(self):
         super().__init__()

@@ -1,11 +1,4 @@
-"""qslab CLI: `python -m qslab.api.cli generate --model ... [flags]`.
-
-The flags mirror the L4 facade (qslab/api/llm.py), which mirrors
-qslab.runtime.config.Config — so this is the runtime stack (M8+): packed W4
-weights, the int4 paged KV pool, CUDA graphs and speculative decoding. The
-frozen M0-M7 engine's own knobs (kv_mode / kv_plan) are deliberately not
-surfaced here; that engine is only reachable as qslab.engine.QslabEngine.
-"""
+"""CLI for the qslab runtime: one `generate` verb."""
 from __future__ import annotations
 
 import argparse

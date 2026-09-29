@@ -1,13 +1,4 @@
-"""L4: the public qslab interface — ``LLM(model_path).generate(...)``.
-
-This is the only entry point users need. It wraps the mainline runtime
-(``qslab/runtime``, M8+): paged int4 KV pool, continuous batching, CUDA graphs,
-W4 packed weights and speculative decoding.
-
-The frozen M0-M7 engine (``qslab/engine``) deliberately has no facade here — it
-stays reachable as ``qslab.engine.QslabEngine``, which is how the M0-M7
-benchmark scripts and the oracle cross-checks already construct it.
-"""
+"""Public qslab interface: LLM(model_path).generate(...)."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -24,7 +15,7 @@ GREEDY = 1e-6
 
 @dataclass(slots=True)
 class SamplingParams:
-    """Decode-time knobs. Greedy by default, matching the M0+ measurement protocol."""
+    """Decode-time knobs."""
     max_tokens: int = 128
     temperature: float = GREEDY
     ignore_eos: bool = False
@@ -40,18 +31,7 @@ class SamplingParams:
 
 
 class LLM:
-    """Unified qslab entry point over the runtime.
-
-    Example:
-        llm = LLM("models/Qwen3-8B", w4="models/Qwen3-8B-qslab-w4-awq",
-                  smooth_kv="results/smooth_kv4_qwen3-8b.pt")
-        print(llm.generate(" The capital of France is",
-                           SamplingParams(max_tokens=32))["text"])
-
-    Unrecognised keywords pass straight through to ``qslab.runtime.config.Config``,
-    so any runtime knob (``enforce_eager``, ``gpu_memory_utilization``,
-    ``kvcache_block_size`` ...) is reachable without duplicating its signature.
-    """
+    """Unified qslab entry point over the runtime."""
 
     def __init__(self, model_path: str | Path, *,
                  w4: str | None = None,               # qslab_w4_v1 packed dir
@@ -83,8 +63,9 @@ class LLM:
     # ------------------------------------------------------------------
     @property
     def engine(self):
-        """The wrapped LLMEngine. Public because the service surface drives
-        step() directly and must not reach into a private attribute."""
+        """The wrapped LLMEngine."""
+        # Public because the service surface drives step() directly and must not reach into
+        #   a private attribute.
         return self._engine
 
     @property
@@ -93,15 +74,14 @@ class LLM:
 
     @property
     def stats(self) -> dict:
-        """Speculative counters for the last call: steps / proposals / accepted
-        / committed plus acceptance_rate and mean_len (tokens per verify step,
-        i.e. the speedup the window buys). Empty when speculation is off."""
+        """Speculative counters for the last call: steps/proposals/accepted/committed,
+        acceptance_rate, mean_len; empty when speculation is off."""
         sched = self._engine.scheduler
         return dict(sched.spec_stats) if sched.gamma else {}
 
     def generate(self, prompt: str | list[int],
                  params: SamplingParams | None = None) -> dict:
-        """One prompt. Returns {'text', 'token_ids', 'stats'}."""
+        """Generate one prompt; returns text, token_ids and stats."""
         return self.generate_batch([prompt], params)[0]
 
     def generate_batch(self, prompts: list[str | list[int]],

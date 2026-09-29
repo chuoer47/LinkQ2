@@ -15,11 +15,10 @@ class Context:
     slot_mapping: torch.Tensor | None = None
     context_lens: torch.Tensor | None = None
     block_tables: torch.Tensor | None = None
-    # prefill-with-pool-prefix plan (set by prepare_prefill when cu_k > cu_q):
-    # prefix_slots = the pool slots of every sequence's cached prefix,
-    # concatenated in sequence order; prefix_plan = [(slot_off, cached, q_start,
-    # q_end)] per sequence, computed ONCE per step so no attention layer pays
-    # a GPU sync to recompute it (28 layers x tolist was ~14ms)
+    # prefill-with-pool-prefix plan (set by prepare_prefill when cu_k > cu_q): prefix_slots
+    #   = the pool slots of every sequence's cached prefix, concatenated in sequence order;
+    #   prefix_plan = [(slot_off, cached, q_start, q_end)] per sequence, computed ONCE per
+    #   step so no attention layer pays a GPU sync to recompute it
     prefix_slots: torch.Tensor | None = None
     prefix_plan: list | None = None
 

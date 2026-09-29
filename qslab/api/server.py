@@ -1,29 +1,8 @@
-"""L4 service surface: an OpenAI-compatible HTTP front end over the runtime.
-
-Scope is deliberately minimal — /health, /v1/models, /v1/chat/completions and
-the raw /v1/completions over one engine, streaming and non-streaming. What is
-fixed here is the *shape*, so the measurement work (benchmarks/09, benchmarks/10)
-has something a caller can point at.
-
-Design notes
-------------
-* One pump thread owns the engine. ``LLMEngine.step()`` is synchronous and
-  single-threaded and the scheduler inside it is the batching point, so the
-  server does not create a thread per request: clients hand their request to
-  ``EnginePump`` and read deltas from an ``asyncio`` queue the pump feeds with
-  ``call_soon_threadsafe``.
-* Token-level streaming needs per-step visibility, which ``step()`` does not
-  give (it reports only finished sequences). The pump therefore keeps the
-  ``Sequence`` that ``LLMEngine.add_request`` returns and diffs
-  ``seq.completion_token_ids`` after every step. A preempted, re-prefilled
-  sequence keeps its token list, so the diff stays correct.
-* Client disconnects are not wired to cancellation: an abandoned request keeps
-  generating until its token budget runs out and the pump drops the deltas.
-  Cancelling mid-run needs a scheduler API that does not exist yet, so it is
-  registered as a limit instead of being half-implemented.
-* aiohttp is an optional extra (``pip install -e .[serve]``); the engine itself
-  keeps no web dependency.
-"""
+"""L4 service surface: an OpenAI-compatible HTTP front end over the runtime."""
+# Client disconnects are not wired to cancellation: an abandoned request keeps generating
+#   until its token budget runs out and the pump drops the deltas.
+# Cancelling mid-run needs a scheduler API that does not exist yet, so it is registered as a
+#   limit instead of being half-implemented.
 from __future__ import annotations
 
 import asyncio
@@ -168,9 +147,7 @@ def _bad_request(msg: str):
 
 
 def create_app(llm, *, model_name: str | None = None, max_tokens_cap: int = 4096):
-    """Build the aiohttp app over an ``LLM`` facade or a raw ``LLMEngine`` — or
-    anything with the same add_request / step / is_finished / tokenizer surface,
-    which is what the fast-tier tests hand it."""
+    """Build the aiohttp app over an LLM facade or a raw LLMEngine."""
     from aiohttp import web
 
     engine = getattr(llm, "engine", llm)

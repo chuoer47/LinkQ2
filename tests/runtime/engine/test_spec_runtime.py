@@ -1,20 +1,8 @@
-"""M9: speculative verify through the real engine (design-m9 §5).
-
-What is NOT asserted: exact greedy token equality between spec and non-spec
-engines. The two paths run different GEMM M-dims (M rows vs 1), so cuBLAS
-tiling can flip near-tie argmaxes — the same measured chaos as M8 (HF itself
-drifts 0.02-0.03 between solo and batched). The mathematical structure is
-asserted instead:
-
-  - padding neutrality: a sequence with no drafts riding a verify batch is a
-    plain decode step (first token exactly equal — prefill path)
-  - replay-stub acceptance: proposing the engine's own known greedy
-    continuation must be accepted at (or very near) full length
-  - real n-gram on a copy-prompt: strictly fewer steps, full length committed
-  - determinism: identical spec runs are identical
-  - edges: prompt shorter than the n-gram window, max_tokens truncating
-    mid-draft, generation across block boundaries
-"""
+"""Speculative verify through the real engine."""
+# Exact greedy token equality between spec and non-spec runs is NOT asserted: the two paths
+#   run different GEMM shapes, so cuBLAS tiling can flip a near-tie argmax.
+# Asserted instead: padding neutrality, replay-stub acceptance, fewer steps on a copy
+#   prompt, determinism, and the window / truncation / block-boundary edges.
 import pytest
 import torch
 
@@ -82,8 +70,8 @@ class _Counting:
 
 
 def test_padding_neutral_first_token_and_length():
-    """A no-draft sequence riding the verify batch: output length respected,
-    first token exactly the plain decode token (prefill boundary is exact)."""
+    """A no-draft sequence riding the verify batch: output length respected, first token
+    exactly the plain decode token (prefill boundary is exact)."""
     eng = _eng()
     try:
         eng.scheduler.proposer = None          # never propose: pure padding
@@ -97,8 +85,7 @@ def test_padding_neutral_first_token_and_length():
 
 
 def test_replay_stub_acceptance():
-    """Proposing the engine's own greedy continuation must be accepted almost
-    fully — validates the accept/commit/trim machinery, not the proposer."""
+    """Proposing the engine's own greedy continuation must be accepted almost fully."""
     eng_plain = _eng(spec=False)
     ref = _gen(eng_plain, COPY_PROMPT, n=64)
     _release(eng_plain)
@@ -170,8 +157,8 @@ def test_spec_is_deterministic():
 
 
 def test_short_prompt_and_small_budget():
-    """Prompt shorter than the n-gram window (never proposes) and a token
-    budget smaller than the draft window (mid-verify truncation)."""
+    """Prompt shorter than the n-gram window (never proposes) and a token budget smaller
+    than the draft window (mid-verify truncation)."""
     eng = _eng()
     try:
         got = _gen(eng, " Paris", n=6)
@@ -217,13 +204,7 @@ def test_spec_with_cuda_graph():
 
 
 def test_lookahead_proposer_end_to_end():
-    """M10: the migrated M6 self-proposal mode rides the same verify path.
-
-    It is a different proposer (persistent index, chain extension, first
-    occurrence wins) behind identical acceptance machinery, so the assertions
-    are the machinery's: full length, an exact prefill token, and fewer steps
-    than tokens.
-    """
+    """The migrated self-proposal mode rides the same verify path."""
     eng = _eng(method="lookahead")
     try:
         assert eng.scheduler.proposer.__class__.__name__ == "LookaheadProposer"
@@ -243,12 +224,7 @@ def test_lookahead_proposer_end_to_end():
 
 
 def test_temperature_verify_accepts_ratio_and_replays():
-    """Sampled decoding through the speculative path (design-m9 §7 closed).
-
-    The rule promises the target's *distribution*, never its argmax, so this
-    asserts the machinery and the replay stability a seeded run can give — not
-    equality with the greedy tokens above.
-    """
+    """Sampled decoding through the speculative path."""
     eng = _eng()
     try:
         torch.manual_seed(7)

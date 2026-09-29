@@ -56,12 +56,7 @@ class LLMEngine:
         del self.model_runner
 
     def add_request(self, prompt: str | list[int], sampling_params: SamplingParams) -> Sequence:
-        """Queue one request and hand back its Sequence.
-
-        The return value is what the HTTP service surface (qslab.api.server)
-        watches: step() reports only finished sequences, so token-level
-        streaming needs the live Sequence to diff completion_token_ids.
-        """
+        """Queue one request and hand back its Sequence."""
         if isinstance(prompt, str):
             prompt = self.tokenizer.encode(prompt)
         seq = Sequence(prompt, sampling_params)
@@ -75,9 +70,9 @@ class LLMEngine:
             token_ids = self.model_runner.call("run", seqs, is_prefill)
             self.scheduler.postprocess(seqs, token_ids, is_prefill)
         elif any(seq.spec_verify for seq in seqs):
-            # speculative verify step: one M-row forward, ratio acceptance
-            # (design-m9 + Leviathan). Sequences without drafts ride along
-            # padded — their step is semantically an ordinary decode.
+            # Speculative verify step: one M-row forward, ratio acceptance. Sequences
+            #   without drafts ride along padded — their step is semantically an ordinary
+            #   decode.
             draft_probs = self._propose(seqs)
             token_ids = self.model_runner.call("run_verify", seqs, draft_probs)
             num_tokens = -self.scheduler.postprocess_verify(seqs, token_ids)
@@ -93,13 +88,7 @@ class LLMEngine:
         return outputs, num_tokens
 
     def _propose(self, seqs):
-        """Fill spec_drafts for the whole verify batch.
-
-        Every sequence is proposed for, at its own temperature: the acceptance
-        rule is the Leviathan ratio test, which is lossless for sampled
-        proposals as well as greedy ones (a greedy or lookup proposal is just
-        the one-hot case where it degenerates to the argmax check).
-        """
+        """Fill spec_drafts for the whole verify batch."""
         proposer = self.scheduler.proposer
         if proposer is None:
             return

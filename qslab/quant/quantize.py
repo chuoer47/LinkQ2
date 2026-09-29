@@ -1,12 +1,4 @@
-"""Offline quantization driver: HF checkpoint -> qslab_w4_v1 directory.
-
-Usage (inside qslab env, repo root):
-  python -m quantizer.quantize --model models/Qwen3-1.7B --algo rtn \
-      --out models/Qwen3-1.7B-qslab-w4-rtn [--awq] [--calib results/frozen/calib_c4_128x2048.pt]
-
-Quantized: q/k/v/o_proj, gate/up/down_proj of every decoder layer.
-Skipped: embed_tokens, lm_head, all norms, rotary.
-"""
+"""Offline quantization driver: HF checkpoint -> qslab_w4_v1 directory."""
 from __future__ import annotations
 
 import argparse

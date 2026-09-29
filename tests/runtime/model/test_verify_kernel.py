@@ -1,15 +1,4 @@
-"""M9: the M-query verify kernel against a torch reference.
-
-The verify forward sends M = gamma+1 queries per sequence through the decode
-kernel — row m reads keys [0, L+m), its own slot being the causal bound. The
-reference dequantizes the same int4 pool and does plain softmax attention, so
-any difference is kernel arithmetic, not quantization.
-
-Causality is asserted structurally: corrupting the KV at the LAST draft slot
-must leave rows 0..M-2 untouched (they read strictly below it), and the -1
-block padding (a capped draft window) must degrade to attention over the
-available prefix instead of reading wild memory.
-"""
+"""The M-query verify kernel against a torch reference."""
 import pytest
 import torch
 
@@ -161,8 +150,8 @@ def test_causality_last_draft_slot():
 
 
 def test_neg1_padding_degrades_to_prefix():
-    """A row past its sequence's blocks reads -1 padding: finite output,
-    equal to attention over the available prefix."""
+    """A row past its sequence's blocks reads -1 padding: finite output, equal to attention
+    over the available prefix."""
     bs, L, M, hq, hkv, d = 1, 100, 4, 4, 2, 64
     n_slots = 96                     # blocks 0..2 must exist in the pool
     k_cache, v_cache = _make_pool(n_slots, hkv, d, seed=5)
@@ -195,8 +184,8 @@ def test_neg1_padding_degrades_to_prefix():
 
 
 def test_materialize_kv_roundtrip():
-    """store -> materialize must return the original values within the int4
-    quantization step (the prefix-cache hit path depends on it)."""
+    """Store -> materialize must return the original values within the int4 quantization
+    step (the prefix-cache hit path depends on it)."""
     hkv, d, n = 2, 64, 96
     g = torch.Generator(device="cuda").manual_seed(11)
     k = (torch.randn(n, hkv, d, generator=g, device="cuda") * 0.5).half()

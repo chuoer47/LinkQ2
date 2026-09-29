@@ -1,15 +1,4 @@
-"""qslab runtime weight loader — vendored from nano-vllm (MIT), adapted.
-
-Differences from upstream:
-- model construction happens in qslab (the runner builds Qwen3ForCausalLM
-  from our runtime qwen3.py); this loader only fills weights.
-- `swap_w4` replaces the fp16 Linear layers with L1's packed W4Linear, so a
-  qslab_w4_v1 checkpoint drives the runtime end to end.
-
-The checkpoints are keyed by HF module name and the runtime model keeps the
-projections separate for exactly that reason (see qwen3.py), so the swap is a
-direct name match — no shard mapping, no repacking.
-"""
+"""Qslab runtime weight loader — vendored from nano-vllm (MIT), adapted."""
 from __future__ import annotations
 
 import json
@@ -48,13 +37,7 @@ def load_model(model: nn.Module, path: str):
 
 def swap_w4(model: nn.Module, packed_dir: str,
             backend: str = "w4.auto") -> int:
-    """Replace runtime Linear layers with packed W4Linear ones, in place.
-
-    `packed_dir` is a qslab_w4_v1 directory (safetensors + config.json, and
-    awq_scales.json when the checkpoint used AWQ). Modules without packed
-    weights — embeddings, norms, an untied lm_head — are left in fp16, which
-    is what the checkpoints expect.
-    """
+    """Replace runtime Linear layers with packed W4Linear ones, in place."""
     from qslab.models.w4linear import W4Linear
     from qslab.quant.packfmt import load_qslab_w4
     from qslab.runtime.model.primitives import Linear as RuntimeLinear

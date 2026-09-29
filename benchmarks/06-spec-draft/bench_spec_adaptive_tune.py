@@ -1,46 +1,24 @@
-"""Sweep the two unswept priors of the adaptive draft window.
+"""Sweep the two unswept priors of the adaptive draft window: the trigger window and the
+size of the cut.
 
-`Scheduler._adapt_gamma` ships as a shrink-only ratchet: average the last
-WINDOW=3 per-sequence accept lengths, and if that mean is <= 1.0 cut the window
-to gamma//2. M10 settled *whether* to grow back (no — results/m10_draft_sweep.txt
-reading 4) but reading 7 states plainly that the trigger window and the size of
-the cut were never swept; they are M6 priors carried into the new runtime. This
-script sweeps both axes.
-
-Family (FAMILY env, whitespace-separated): natural is the sweep, because it is the
-only family where the controller ever fires; copy is the guard — M10 read 6 found
-the shipped ratchet never intervenes there, and any window this sweep finds worth
-shipping has to leave that true, which is what FAMILY="natural copy" checks.
-
-Cells (POLICIES, whitespace-separated; `w3h` IS the shipped rule, so reproducing
-1.00-1.18x on it is the precondition for trusting the rest):
-  off          adaptive off, window pinned at the ceiling — the 0.91x control
-  wNh          moving average over N verify steps, cut to ceiling//2, N in 1 2 3 4 6
-  w3rel        shipped window, cut relative: proposal_gamma//2 (can cascade to 1)
-  w3m1         shipped window, give up one draft slot per trigger
-  w3to1        shipped window, cut straight to no speculation
-  w3thr15      shipped window + cut, trigger moved to avg <= 1.5
-
-Timing follows benchmarks/06-spec-draft/bench_spec_draft.py: decode/verify steps
-only, prefill excluded, and the same reporting discipline — W4 greedy trajectories
-are chaotic, so tok/s is a band (+/-6-9% run to run on natural), not a per-token
-claim. The steady signals are tok/step and *where the cut lands*, which is what
-the summary rows lead with.
-
-Env:
-  MODEL     target            (default models/Qwen3-8B)
-  W4        packed target dir (default models/Qwen3-8B-qslab-w4-awq; "" = fp16)
-  DRAFT     draft model       (default models/Qwen3-0.6B)
-  GAMMA     window ceiling    (default 4; spec_num_drafts, also the graph-family M)
-  TOKENS    tokens per run    (default 192)
-  REPEATS   runs per cell     (default 3; baselines are measured the same times)
-  POLICIES  cell list         (default "off w1h w2h w3h w4h w6h w3rel w3m1 w3to1 w3thr15")
-  FAMILY    prompt families   (default "natural"; add "copy" for the guard pass)
-  TEMPERATURE (default 1e-6 = greedy; T>0 collapses acceptance — see
-              bench_spec_temperature.py, do not expect the controller to bite)
-  UTIL      target gpu_memory_utilization (default 0.62)
-  DRAFT_UTIL (default 0.9)
-"""
+MODEL         target (default models/Qwen3-8B)
+W4            packed target dir (default models/Qwen3-8B-qslab-w4-awq; "" = fp16)
+DRAFT         draft model (default models/Qwen3-0.6B)
+GAMMA         window ceiling (default 4; spec_num_drafts, also the graph-family M)
+TOKENS        tokens per run (default 192)
+REPEATS       runs per cell (default 3)
+POLICIES      cell list (default "off w1h w2h w3h w4h w6h w3rel w3m1 w3to1 w3thr15")
+FAMILY        prompt families (default natural; add "copy" for the guard pass)
+TEMPERATURE   (default "1e-6 = greedy"; T>0 collapses acceptance; see bench_spec_temperature.py, do
+                not expect the controller to bite)
+UTIL          target gpu_memory_utilization (default 0.62)
+DRAFT_UTIL    (default 0.9)"""
+# The shipped rule is the w3h cell — moving average over 3 rounds, cut to ceiling//2 — so
+#   reproducing its reading is the precondition for trusting the rest.
+# natural is the sweep family (the only one where the controller ever fires); copy is the
+#   guard, where a twitchy window must not cost anything.
+# Timing covers decode/verify steps only, prefill excluded; on a greedy W4 run tok/s is a
+#   band, not a per-token claim, so the summary leads with tok/step and where the cut lands.
 import os
 import sys
 from collections import deque
@@ -138,12 +116,10 @@ def _release(eng):
 
 
 def run_one(rule, *, adaptive, gamma, prompt, n_tokens=N_TOKENS):
-    """One generation, timed over the decode/verify window only.
-
-    `windows[i]` is the window the scheduler reports *after* verify step i+1,
-    i.e. what the next proposal round will spend — the same convention as
-    bench_spec_draft.py, so the two files' trajectories are comparable.
-    """
+    """One generation, timed over the decode/verify window only."""
+    # windows[i] is the window the scheduler reports AFTER verify step i+1, i.e. what the
+    #   next proposal round spends — the same convention as the draft bench, so the two
+    #   trajectories are comparable.
     kw = dict(max_model_len=4096, max_num_seqs=4, enforce_eager=False,
               gpu_memory_utilization=UTIL)
     calib = "results/smooth_kv4_" + Path(MODEL).name.lower() + ".pt"

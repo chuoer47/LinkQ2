@@ -1,22 +1,8 @@
-"""qslab runtime Qwen3 — vendored from nano-vllm (MIT), adapted:
-
-- TP parallelism removed (single GPU).
-- Linear layers are qslab runtime primitives with the weight_loader protocol
-  (so nano-vllm's loader fills them), and are W4-swappable after load.
-- Attention is qslab's quantized paged attention: per-token int4 KV storage
-  (slot-mapped), flash-attn varlen prefill, Triton decode kernel.
-
-**Projections are deliberately NOT fused** (no qkv_proj / gate_up_proj):
-
-  * the packed W4 checkpoints are keyed by HF module name (q_proj, k_proj,
-    v_proj, gate_proj, up_proj) with the AWQ input scale stored per logical
-    module — a fused qkv would discard them, or force per-shard scale factors
-    to be stored on one tensor.
-  * keeping them separate ends the "v is a strided view of a fused buffer"
-    hazard that caused the M8 store bug.
-  * the cost was measured at ~3% decode throughput (149.1 -> 144.8 tok/s),
-    which does not justify the fused layout.
-"""
+"""Qwen3 runtime model: vendored from nano-vllm, single GPU, W4-swappable Linears, int4
+paged attention."""
+# Projections are deliberately NOT fused (no qkv_proj / gate_up_proj): the packed W4
+#   checkpoints are keyed by HF module name and hold one AWQ scale set per logical module.
+# Separate projections also avoid the strided-view hazard of v aliasing a fused buffer.
 from __future__ import annotations
 
 import torch

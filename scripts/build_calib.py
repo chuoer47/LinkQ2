@@ -1,8 +1,5 @@
-"""M1: build frozen calibration set (C4, 128 samples x 2048 tokens) once.
-
-docs/03 protocol: store token ids to results/frozen/calib_c4_128x2048.pt,
-then never regenerate.
-"""
+"""Build the frozen calibration set (C4, 128 samples x 2048 tokens) once."""
+# Store token ids once: every quantization and KV calibration must reuse them.
 import sys
 from pathlib import Path
 
@@ -35,6 +32,7 @@ for row in ds:
         break
 
 assert len(samples) == N_SAMPLES, f"only got {len(samples)} samples"
+OUT.parent.mkdir(parents=True, exist_ok=True)
 torch.save({"dataset": "c4/en/train", "n": N_SAMPLES, "seq_len": SEQ_LEN,
             "token_ids": samples}, OUT)
 print(f"frozen calib saved: {OUT} ({N_SAMPLES} x {SEQ_LEN})")

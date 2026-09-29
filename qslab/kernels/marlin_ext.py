@@ -1,8 +1,4 @@
-"""Build the vendored Marlin kernel as a qslab torch extension.
-
-Marlin source: third_party/marlin (IST-DASLab, Apache 2.0), commit pinned.
-Build with our qslab toolchain (nvcc 12.4 + gcc-13, sm_89).
-"""
+"""Build the vendored Marlin kernel as a torch extension."""
 import os
 import sys
 from pathlib import Path

@@ -1,24 +1,10 @@
-"""M10: the acceptance rule behind temperature-aware speculation.
-
-The engine's prefix walk (scheduler.postprocess_verify) is only correct if a
-rejected row can never return its own draft token, which is what
-``ModelRunner.rejection_verify`` provides. These tests pin the rule itself —
-Leviathan's ``min(1, q/p)`` accept plus the ``norm(max(0, q - p))``
-resample — rather than any engine output, because the losslessness claim is a
-statement about this function's output distribution:
-
-  - drawing proposals from p and running the rule reproduces q exactly
-    (total variation against the target's own q, with a control assertion so a
-    biased rule cannot pass by both being wrong in the same direction);
-  - a deterministic proposal is the p = one-hot case of the same rule, which is
-    where the n-gram/lookahead proposers live;
-  - greedy and non-speculative rows are returned untouched, which is what keeps
-    every M9 greedy test measuring the thing it always measured.
-
-The adaptive window policy (migrated from the frozen DynamicMode) is a pure
-function of the recent acceptance history, so it is exercised through a
-duck-typed scheduler slice instead of a loaded model.
-"""
+"""The acceptance rule behind temperature-aware speculation."""
+# The engine's prefix walk is only correct if a rejected row can never return its own draft
+#   token, which is what rejection_verify provides.
+# These tests pin the rule itself rather than engine output, because losslessness is a
+#   statement about this function's output distribution.
+# The adaptive window policy is a pure function of the recent acceptance history, so it is
+#   exercised through a duck-typed scheduler slice instead of a loaded model.
 from collections import deque
 
 import pytest
@@ -68,11 +54,9 @@ def test_ratio_acceptance_reproduces_the_target_distribution():
 
 
 def test_one_hot_proposal_is_the_same_rule():
-    """draft_probs=None means p = delta_x: accept with probability q(x).
-
-    That is the n-gram/lookahead case, and the theorem says it is still
-    exactly q — the resample must renormalize q with x's own mass removed.
-    """
+    """draft_probs=None means p = delta_x: accept with probability q(x)."""
+    # That is the n-gram/lookahead case, and the theorem says it is still exactly q — the
+    #   resample must renormalize q with x's own mass removed.
     torch.manual_seed(1)
     row_logits = torch.randn(V)
     logits = row_logits.unsqueeze(0).expand(N, V).contiguous()
@@ -99,8 +83,8 @@ def test_rejected_row_never_returns_its_own_draft():
 
 
 def test_greedy_and_non_speculative_rows_pass_through():
-    """Greedy keeps the plain sample (argmax-equality as always), and so does
-    every row that carries no proposal — the bonus row and the padded tail."""
+    """Greedy keeps the plain sample (argmax-equality as always), and so does every row that
+    carries no proposal."""
     torch.manual_seed(3)
     logits = torch.randn(4, V)
     sampled = torch.tensor([5, 6, 7, 8])
@@ -113,9 +97,8 @@ def test_greedy_and_non_speculative_rows_pass_through():
 
 @pytest.mark.gpu
 def test_draft_rows_align_with_the_verify_window():
-    """Row m of the flattened batch is the decision for drafts[m] — the same
-    indexing postprocess_verify walks, so a shift here would accept tokens the
-    target never produced."""
+    """Row m of the flattened batch is the decision for drafts[m] — the same indexing
+    postprocess_verify walks."""
     from qslab.runtime.state.sequence import Sequence
     from qslab.runtime.sampling_params import SamplingParams
 
@@ -151,15 +134,10 @@ def _drive(hist):
 
 def test_adaptive_gamma_shrinks_and_never_grows_back():
     assert _drive([0.0, 0.0, 0.0])[-1] == 2, "a window that lands nothing must halve"
-    # Regrowth is deliberately absent, so these drives assert the ratchet:
-    # acceptance is prefix-based, and a round that lands 2/2 after a halve
-    # carries no information about a 3rd or 4th draft. Measured over 4 repeats
-    # on 8B natural (M10, results/m10_draft_sweep.txt): holding the halved
-    # window 1.00-1.18x, a regrow rule 0.90-1.11x, pinned ceiling no
-    # adaptation 0.91x. The means (1.07x vs 0.98x) are read as trajectory
-    # divergence, not as a saving — a repeat of one cell lands anywhere in
-    # 0.90-1.05 (results/m10_adaptive_tune.txt), and a window cut saves no
-    # time anyway because the proposer loop still runs at configured gamma.
+    # Regrowth is deliberately absent, so these drives assert the ratchet: acceptance is
+    #   prefix-based, and a round that lands 2/2 after a halve carries no information about
+    #   a 3rd or 4th draft. A cut window costs nothing to keep either, since the proposer
+    #   loop still runs at configured gamma.
     assert _drive([0.0, 0.0, 0.0, 2.0, 2.0, 2.0])[-1] == 2, "halving is one-way"
     assert _drive([0.0, 0.0, 0.0, 4.0, 4.0, 4.0])[-1] == 2
     # the ceiling is the configured gamma: M is baked into the verify graph
@@ -168,11 +146,9 @@ def test_adaptive_gamma_shrinks_and_never_grows_back():
 
 
 def test_adaptive_window_is_a_false_positive_filter():
-    """WINDOW is not a reaction-speed knob — γ//2 is an idempotent target, so a
-    wider window only delays the one irreversible cut. Measured on copy
-    (results/m10_adaptive_tune.txt): a 1-round window fired on a single
-    lone 1-of-4 round and cost 27% of throughput, 2 rounds cost 24%; the
-    shipped 3-round window ignored that same round and never fired in 30 draws."""
+    """WINDOW is not a reaction-speed knob — gamma//2 is an idempotent target."""
+    # So the window only changes when the one irreversible cut lands, which is why a single
+    #   bad round among three must not fire it.
     assert _drive([4.0, 4.0, 1.0])[-1] == 4, "one bad round among three is not a trend"
     assert _drive([1.0, 1.0, 1.0])[-1] == 2, "three rounds at break-even must cut"
 

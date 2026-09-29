@@ -1,36 +1,14 @@
-"""L0: slot-mapped int4 paged KV — store (quantize+write) and decode kernels.
-
-Pool layout (nano-vllm slot semantics; ONE slot per token, all heads inside):
-  k_q   [total_slots, H, D/8]      uint32   K values
-  k_s   [H, D]                     fp16     K per-channel scale   (STATIC)
-  v_q   [total_slots, H, D/8]      uint32   V values
-  v_s   [total_slots, H, D/G]      fp16     V per-token-group scale (dynamic)
-
-Encoding is offset-binary: the store writes nibble = qi + 8 and both decode
-paths read (nib - 8) * scale. Sharing one convention is essential — a
-two's-complement reader on offset-binary data biases every value by 8*scale.
-
-Why K's scale is static and per-channel: K has fixed outlier channels per head
-(qk-norm + RoPE leave a few channels ~10-100x the rest), so quantizing a whole
-token together buries every normal channel under them. A per-channel scale
-fixes that, but a *dynamic* per-channel scale would have to be recomputed for
-already-stored slots as tokens arrive — a write whose addressing depends on
-data, which breaks CUDA Graph capture. Calibration instead flattens the
-outliers offline (QServe SmoothAttention, scripts/build_smooth_kv.py) and
-freezes one scale per channel, so the K write stays a pure function of
-slot_mapping.
-
-V's outliers are token-local, so a dynamic per-token scale grouped along D is
-both more accurate and still data-independent (the group a token lands in is
-fixed by its slot).
-
-Speculative verify (design-m9): the same kernel serves an M-query verify
-forward. The grid is (N_Q, rows) where rows = bs*M; program row r belongs to
-seq = r // M, query m = r % M, and its key-read bound is L + m. Causality
-needs no explicit mask between the drafts: a draft's KV lives at slot index
-L+m-1, which is below only its own and later rows' read bounds. M=1 is the
-ordinary decode and compiles to the same instructions.
-"""
+"""L0: slot-mapped int4 paged KV — store (quantize+write) and decode kernels."""
+# Pool layout, one slot per token with all heads inside: k_q [slots, H, D/8] uint32 + k_s
+#   [H, D] fp16 static; v_q [slots, H, D/8] uint32 + v_s [slots, H, D/G] fp16 dynamic.
+# Encoding is offset-binary: store writes nibble = qi + 8 and every reader applies (nib - 8)
+#   * scale — a two's-complement reader on offset-binary data biases each value by 8*scale.
+# K is quantized with a static per-channel scale because calibration flattens the fixed
+#   outlier channels; a dynamic per-channel scale would make the write address data-
+#   dependent and break CUDA Graph capture. V's outliers are token-local, so its scale is
+#   dynamic and grouped along D.
+# Verify reuses the decode kernel as an M-query batch: rows = bs*M, row r is sequence r // M
+#   at query r % M with key bound L + m, so causality needs no explicit mask.
 from __future__ import annotations
 
 import torch
@@ -168,13 +146,7 @@ def paged_attention_decode(q: torch.Tensor, k_cache, v_cache,
                            block_n: int = 128, num_kv_heads: int | None = None,
                            k_scale=None, v_group: int = 64,
                            verify_m: int = 1) -> torch.Tensor:
-    """q [rows, N_Q_HEADS, D] fp16 -> out [rows, N_Q_HEADS, D] fp16.
-
-    M=1: ordinary decode, rows = bs, context_lens [bs] includes the current
-    token. M>1: verify forward, rows = bs*M (row = seq*M + m); context_lens
-    is per-SEQUENCE (the committed L); row m reads keys [0, L+m) — its own
-    slot is the causal bound, so drafts never leak into earlier rows.
-    """
+    """q [rows, N_Q_HEADS, D] fp16 -> out [rows, N_Q_HEADS, D] fp16."""
     rows, N_Q, D = q.shape
     n_kv = num_kv_heads if num_kv_heads is not None else N_Q
     out = torch.empty_like(q)
@@ -194,7 +166,7 @@ def paged_attention_decode(q: torch.Tensor, k_cache, v_cache,
 def store_kv_quant(k: torch.Tensor, v: torch.Tensor,
                    k_cache, v_cache, slot_mapping: torch.Tensor,
                    v_group: int = 64):
-    """k, v: [N, H, D] fp16. slot_mapping: [N] int32 (slot per token, -1 skip)."""
+    """k, v: [N, H, D] fp16. slot_mapping: [N] int32, one slot per token, -1 skips."""
     N, H, D = k.shape
     kq, ks = k_cache
     vq, vs = v_cache
@@ -206,19 +178,10 @@ def store_kv_quant(k: torch.Tensor, v: torch.Tensor,
 
 def materialize_kv(k_cache, v_cache, slots: torch.Tensor,
                    v_group: int = 64) -> tuple[torch.Tensor, torch.Tensor]:
-    """Dequantize pool slots back to fp16 K/V: [T, H, D] each.
-
-    The inverse of store_kv_quant, used by prefill when a prefix-cache hit
-    (or a previous chunked-prefill block) hands flash-attn a cu_seqlens_k
-    that claims a length only the pool holds. K's stored values are already
-    post-lambda (SmoothAttention applied before the store), so what comes
-    back is exactly what a fresh prefill would have computed, up to the int4
-    quantization error.
-
-    Pure torch (bit ops on the int32 view; values fit in 4 bits so sign is
-    irrelevant). T is bounded by the cached prefix length, so a copy of
-    ~2x prefix-size fp16 is the whole cost (<1ms for 4K tokens at 8B).
-    """
+    """Dequantize pool slots back to fp16 K/V: [T, H, D] each."""
+    # The inverse of store_kv_quant, used by prefill when a prefix-cache hit hands flash-
+    #   attn a length only the pool holds. K comes back post-lambda, i.e. exactly what a
+    #   fresh prefill would compute up to the int4 error.
     kq, ks = k_cache
     vq, vs = v_cache
     slots = torch.as_tensor(slots, device=kq.device)

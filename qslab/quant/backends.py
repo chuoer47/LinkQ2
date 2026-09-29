@@ -1,17 +1,4 @@
-"""L1: QuantBackend — the pluggable weight-quantization strategy interface.
-
-The backend owns BOTH halves of a quantization scheme:
-  1. packing a fake-quantized fp16 weight into the on-device format
-  2. running ``y = x @ dequant(W)^T`` for arbitrary M
-
-Crucially, **the M-dependent dispatch decision lives inside the backend**
-(previously an ``if backend == "autodetect"`` in L2's W4Linear). L2 just
-calls ``backend.linear(x)`` and the backend knows whether to use the custom
-GEMV kernel (small M) or the Marlin GEMM (large M).
-
-Layer note: this module is L1 and MUST NOT import transformers. It may
-import L0 (qslab.kernels) — that is the allowed downward direction.
-"""
+"""QuantBackend: the pluggable weight-quantization strategy interface."""
 from __future__ import annotations
 
 from typing import Protocol

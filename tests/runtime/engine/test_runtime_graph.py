@@ -1,15 +1,5 @@
-"""M8: runtime-level properties — CUDA Graph, batching, and the batch-size
-sensitivity of greedy decoding.
-
-Background for the last test: batching changes the M dimension of every dense
-GEMM, so cuBLAS picks different tiling and the reduction order — and hence the
-last bits of each matmul — changes. Greedy decoding can then flip at a
-near-tie. This is not specific to qslab: transformers shows the same
-magnitude of drift (0.02-0.03 in logits) for the same prompt batched vs
-alone. What must hold is that the *batched* result matches a reference
-*batched* result, and that the divergence does not depend on other sequences'
-contents (which would indicate cache aliasing).
-"""
+"""runtime-level properties — CUDA Graph, batching, and the batch-size sensitivity of greedy
+decoding."""
 import pytest
 import torch
 
@@ -27,12 +17,7 @@ ORACLE16 = [12095, 13, 576, 6722, 315, 9856, 374, 19846, 13, 576, 6722, 315,
 
 
 def free_engine(eng):
-    """Drop the model, the KV pool and the graphs, then hand the memory back.
-
-    Modules in this file take turns on one card, so each engine must be gone
-    before the next one is built; `del` alone leaves the tensors alive because
-    the attention layers still hold references to them.
-    """
+    """Drop the model, the KV pool and the graphs, then hand the memory back."""
     import gc
     runner = eng.model_runner
     for layer in runner.model.model.layers:
@@ -72,13 +57,7 @@ def graph_engine():
 
 
 def test_cuda_graph_captured_and_lossless(graph_engine):
-    """The int4 paged path must be graph-capturable.
-
-    This is the entire reason K carries a frozen per-channel scale instead of
-    a per-token one: a scale recomputed as tokens arrive would make the write
-    address data-dependent, and graph capture requires it to be a pure
-    function of slot_mapping.
-    """
+    """The int4 paged path must be graph-capturable."""
     graphs = getattr(graph_engine.model_runner, "graphs", None)
     assert graphs, "capture_cudagraph produced no graphs"
     assert set(graphs) >= {1, 2, 4, 8}, f"unexpected batch buckets {sorted(graphs)}"
@@ -101,9 +80,8 @@ def test_identical_prompts_agree_in_batch(graph_engine):
 
 
 def test_varlen_prefill_is_batch_invariant():
-    """flash-attn varlen gives identical output regardless of what else is
-    packed into the same call — so the prefill cannot be the source of any
-    batch-size-dependent drift."""
+    """flash-attn varlen gives identical output regardless of what else is packed into the
+    same call."""
     H_Q, H_KV, D = 16, 8, 128
     g = torch.Generator(device="cuda").manual_seed(0)
     qa = torch.randn(6, H_Q, D, device="cuda", generator=g).half()

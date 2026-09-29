@@ -1,13 +1,4 @@
-"""HF reference loading: safetensors weights -> fp16 torch modules.
-
-The oracle the W4 / KV4 paths are measured against. It does NOT import
-transformers at module level; model construction is delegated to
-adapters.model_builder.
-
-load_w4_model / args_model_dir / read_safetensors_state_dict below are the
-M1a software path (dequantize back into the reference model) and have no
-caller left in the runtime — see TODO 21 for why they are not just deleted.
-"""
+"""HF reference loading: safetensors weights -> fp16 torch modules."""
 from __future__ import annotations
 
 import json
@@ -36,11 +27,8 @@ def load_model_config(model_path: Path | str) -> ModelConfig:
 
 
 def load_reference_model(model_path: Path | str, device: str = "cuda:0") -> torch.nn.Module:
-    """Load the HF Qwen3 model in fp16 (delegates to the adapters layer).
-
-    L2 must not import transformers; construction lives in
-    adapters.model_builder. This wrapper keeps the historical call site.
-    """
+    """Load the HF Qwen3 model in fp16 (delegates to the adapters layer)."""
+    # L2 must not import transformers; construction lives in adapters.model_builder.
     from adapters.model_builder import build_hf_causal_lm
     return build_hf_causal_lm(model_path, device=device)
 
@@ -62,17 +50,11 @@ def read_safetensors_state_dict(model_path: Path | str) -> dict[str, torch.Tenso
 
 
 def load_w4_model(model_path: Path | str, device: str = "cuda:0") -> torch.nn.Module:
-    """Load a qslab_w4_v1 directory: rebuild the transformers model, replace
-    quantized Linears' weights with dequantized fp16 (M1a software path).
-
-    For algo=awq, packed weights carry W' = W diag(s); activation scaling is
-    folded back here: the previous op's output scale must be divided by s.
-    We implement this by wrapping each quantized Linear with an input-scaling
-    forward (x / s) — exact for the first quantized layer after any op, and
-    composed correctly because scaling only applies at quantized-layer entry.
-    Returns an eval-mode fp16 model functionally equivalent to the quantized
-    checkpoint (this is what the W4A16 kernel path must match in M1b).
-    """
+    """Load a qslab_w4_v1 directory into the reference model with the weights dequantized
+    back to fp16 — the software path the kernel must match."""
+    # For algo=awq the packed weights carry W' = W diag(s), so the loader divides each
+    #   quantized Linear's input by s.
+    # No runtime caller left; kept as the fp16 equivalence oracle.
     import json as _json
     from qslab.quant.packfmt import load_qslab_w4, unpack_w4
 
@@ -121,10 +103,7 @@ def _wrap_input_scale(linear: torch.nn.Linear, s: torch.Tensor):
 
 
 def args_model_dir(model_path: Path) -> Path:
-    """The HF source dir the packed model was built from is stored in
-    calib/config indirectly; for 1.7B both live next to each other. The
-    packed model itself carries model_config, so rebuild from the ORIGINAL
-    HF dir recorded at pack time (convention: <packed_dir>.origin.txt)."""
+    """Resolve the original HF dir a packed model was built from."""
     origin = model_path.parent / (model_path.name + ".origin.txt")
     if origin.exists():
         return Path(origin.read_text().strip())

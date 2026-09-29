@@ -1,8 +1,4 @@
-"""L0/L1 shared: a tiny name->class registry used by all pluggable strategies.
-
-Keeping it in its own module (no qslab deps) means every layer can import it
-without violating the layer rule.
-"""
+"""L0/L1 shared: a tiny name->class registry used by all pluggable strategies."""
 from __future__ import annotations
 
 from typing import Callable, TypeVar
@@ -11,14 +7,13 @@ T = TypeVar("T")
 
 
 class Registry:
-    """name -> factory registry with decorator registration.
+    """Name -> factory registry with decorator registration.
 
     Usage:
         BACKENDS = Registry("quant backend")
-
+    
         @BACKENDS.register("w4.v1")
-        class W4V1Backend: ...
-    """
+        class W4V1Backend: ..."""
 
     def __init__(self, what: str):
         self._what = what

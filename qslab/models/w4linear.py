@@ -1,15 +1,4 @@
-"""W4Linear: a Linear replacement backed by a pluggable QuantBackend (L1).
-
-L2 note: this module MUST NOT import qslab.kernels (L0) directly. All kernel
-access goes through the L1 backend returned by ``quant.get_backend`` — that
-is the layering rule established in docs/design-r1.md and the reason the
-per-M dispatch now lives in the backend instead of here.
-
-Backend names (see qslab/quant/w4_backends.py):
-  "w4.v1"     — custom GEMV kernel (the fallback Marlin can't serve)
-  "w4.marlin" — Marlin tensor-core GEMM (mainline at every M since M9)
-  "w4.auto"   — Marlin wherever usable, v1 only where it is not
-"""
+"""W4Linear: nn.Linear replacement backed by a pluggable QuantBackend."""
 from __future__ import annotations
 
 import torch
@@ -76,10 +65,7 @@ class W4Linear(torch.nn.Module):
 
 def swap_w4_linears(model: torch.nn.Module, packed_dir: str,
                     backend: str = "w4.auto") -> int:
-    """Replace quantized Linears with W4Linear using the packed checkpoint.
-
-    Mirrors load_w4_model's weight mapping but keeps weights packed.
-    """
+    """Replace quantized Linears with W4Linear using the packed checkpoint."""
     import json
     from pathlib import Path
     from qslab.quant.packfmt import load_qslab_w4

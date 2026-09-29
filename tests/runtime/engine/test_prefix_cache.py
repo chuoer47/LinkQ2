@@ -1,23 +1,4 @@
-"""Prefix caching: hits are correct, deterministic, and faster.
-
-History (M8): a hit handed prepare_prefill a suffix-only chunk while
-cu_seqlens_k claimed the full length, so flash-attn consumed misaligned
-rows and the sequence silently answered as if its context were the suffix
-alone — measured as a spurious leading token and a diverging continuation.
-Fixed (M9) by materializing the cached int4 prefix back to fp16 in
-PagedAttention._materialize_prefix; the hit path now differs from a cold
-run only by the int4 quantization error.
-
-What is asserted:
-  - hit == hit, exactly (two cache-hit runs are deterministic)
-  - hit vs cold: the FIRST token must match (that is precisely the token the
-    old bug corrupted — a dropped prefix produced a spurious token there);
-    beyond that, near-ties may flip under the quantization noise, so no
-    exact equality is asserted (the M8 greedy-chaos criterion)
-  - a hit is materially faster end-to-end
-  - chunked prefill (max_num_batched_tokens < prompt) exercises the same
-    pool-resident-prefix path and still answers like a single-chunk run
-"""
+"""Prefix caching: hits are correct, deterministic, and faster."""
 import time
 
 import pytest
@@ -71,10 +52,7 @@ def test_hit_is_correct_and_deterministic():
 
 
 def test_second_submission_actually_hits():
-    """The wall-clock gain is bench territory (shared-card noise); what the
-    suite pins down is that the hit HAPPENS: the second submission must be
-    allocated with cached blocks (can_allocate > 0), i.e. prefill actually
-    skips the cached prefix."""
+    """The wall-clock gain is bench territory (shared-card noise)."""
     long2 = LONG * 2
     eng = _engine()
     try:
@@ -114,10 +92,9 @@ def test_hit_with_shared_prefix_new_suffix():
 
 
 def test_chunked_prefill_uses_the_same_pool_prefix_path():
-    """Chunked prefill (prompt > max_num_batched_tokens) is the same bug
-    family: chunk 2's flash-attn needs chunk 1's KV, which only exists in
-    the pool. Materialization covers it; the answer must match a
-    single-chunk engine's first token."""
+    """Chunked prefill (prompt > max_num_batched_tokens) is the same bug family: chunk 2's
+    flash-attn needs chunk 1's KV, which only exists in the pool."""
+    # Materialization covers it; the answer must match a single-chunk engine's first token.
     prompt = LONG + " The capital of Italy is"
     # force chunking: each batch is at most one block
     chunked = _engine(max_num_batched_tokens=128)

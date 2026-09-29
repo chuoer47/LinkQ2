@@ -1,12 +1,4 @@
-"""L4 facade: ``qslab.api.LLM`` over the mainline runtime.
-
-The facade was the one public entry point with no test behind it (TODO M10):
-M0-M7 tests built ``QslabEngine`` directly and the runtime tests build
-``LLMEngine``, so nothing checked that the documented user surface — W4 + int4
-KV + speculation + the stats/memory queries — is reachable and wired to the
-right objects. These are wiring tests, not measurement tests: they assert that
-what the README shows actually runs and reports what it claims.
-"""
+"""L4 facade: qslab.api.LLM over the mainline runtime."""
 import pytest
 import torch
 
@@ -57,9 +49,8 @@ def test_generate_with_w4_and_int4_kv():
         # one packed copy = int4 nibbles plus per-group fp16 scales
         packed = (m.in_features * m.out_features // 2
                   + m.in_features // m.group_size * m.out_features * 2)
-        # Marlin's repack is the same size as the v1 pack and *replaces* it —
-        # holding both was measured at 3.335 GB of dead weight on 8B, so stay
-        # within rounding of one copy
+        # Marlin's repack is the same size as the v1 pack and replaces it, so the budget is
+        #   ONE packed copy — holding both would double it
         assert m.weight_memory_bytes() <= packed * 1.02
         assert m.weight_memory_bytes() < m.in_features * m.out_features * 2
         # the embeddings and lm_head stay fp16, so the whole model is not 1/4

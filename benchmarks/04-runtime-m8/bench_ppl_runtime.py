@@ -1,19 +1,4 @@
-"""WikiText-2 PPL through the paged runtime's real decode path.
-
-Protocol (docs/03): sliding window 1024, stride 512, WikiText-2 raw test.
-
-Why teacher forcing: the int4 cache is only read during decode — a
-prefill-only pass never touches it, because flash-attn consumes the freshly
-computed fp16 K/V. So the loop prefills a context and then feeds the
-ground-truth token one step at a time, scoring each prediction. That is the
-regime the 4-bit cache actually affects, and it is the same code path real
-generation uses (block allocation, slot mapping, context lengths all advance
-normally) — only the sampled token is replaced by the ground truth.
-
-Sequences are retired by giving them a max_tokens budget that the forced
-tokens exhaust, so the block manager releases blocks through its normal path
-rather than being patched.
-"""
+"""WikiText-2 PPL through the paged runtime's real decode path."""
 import math
 import os
 import sys

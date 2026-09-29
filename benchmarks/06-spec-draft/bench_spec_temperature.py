@@ -1,36 +1,23 @@
-"""M10 bench: does the Leviathan ratio path cost the speculation gain?
+"""Does the Leviathan ratio path cost the speculation gain?
 
-Why this exists (TODO 缺环4): M10 swapped the acceptance rule from "argmax
-equality" to the probability-ratio test so that sampling at T>0 stays
-distribution-lossless. Correctness got a test (tests/runtime/engine/test_spec_acceptance.py,
-empirical distribution, TV < 0.06 at N=20000) but the *throughput* claim was
-never measured. Every verify step at T>0 can now pay
-
-  - a [bs*(gamma+1), V] float32 proposal distribution — only a proposer that
-    samples sets it; the n-gram/lookahead lookups stay one-hot and skip it,
-    and the greedy draft path skips it too (draft.py:_sample_rows), and
-  - a vocab-wide softmax + ratio draw + residual resample on the target side.
-
-Reported per (method, prompt family, temperature): decode-window tok/s with
-spec off vs on, tokens committed per verify step, acceptance rate, and peak
-allocated bytes for the whole run (so the fp32 proposal matrix is visible as a
-number instead of an argument). The point is to read a T>0 speedup against the
-greedy speedup of the same run — the delta *is* the cost of losslessness.
-
-Env:
-  MODEL   target model dir            (default models/Qwen3-1.7B)
-  METHOD  proposers to sweep          (default "ngram"; "lookahead" "draft")
-  GAMMA   draft window                (default 4)
-  TOKENS  tokens generated per run    (default 256)
-  TEMPS   temperatures to sweep       (default "1e-6 0.7")
-  W4      packed W4 dir for the target (default none)
-  DRAFT   draft model dir when METHOD includes draft
-  UTIL    gpu_memory_utilization      (default 0.5)
-  PROMPTS prompt families             (default "copy natural random")
-
-Timing covers decode/verify steps only (LLMEngine.step returns a negative
-count for those), so prefill length does not move the numbers.
-"""
+MODEL      target model dir (default models/Qwen3-1.7B)
+METHOD     proposers to sweep (default ngram; "lookahead" "draft")
+GAMMA      draft window (default 4)
+TOKENS     tokens generated per run (default 256)
+TEMPS      temperatures to sweep (default "1e-6 0.7")
+W4         packed W4 dir for the target (default none)
+DRAFT      draft model dir when METHOD includes draft
+UTIL       gpu_memory_utilization (default 0.5)
+PROMPTS    prompt families               Timing covers decode/verify steps only (LLMEngine.step
+             returns a negative count for those), so prefill length does not move the numbers.
+             (default "copy natural random")"""
+# At T>0 a verify step can pay a [bs*(gamma+1), V] float32 proposal distribution plus a
+#   vocab-wide softmax, a ratio draw and a residual resample; one-hot proposers (n-gram,
+#   lookahead, a greedy draft) skip the matrix.
+# Peak allocated bytes are reported per run so the fp32 proposal matrix shows up as a number
+#   instead of an argument.
+# Timing covers decode/verify steps only (step() returns a negative count for those), so
+#   prefill length does not move the numbers.
 import os
 import random
 import sys
@@ -67,9 +54,9 @@ def random_prompt(tok, n=160):
 
 
 def _release(eng):
-    """Drop the engine and everything holding the card — a sweep here builds
-    and tears down a dozen engines in one process, so freeing the int4 pools
-    between runs matters more than it does in a single-shot bench."""
+    """Drop the engine and everything holding the card."""
+    # A sweep here builds and tears down a dozen engines in one process, so freeing the int4
+    #   pools between runs matters more than in a single-shot bench.
     prop = getattr(eng.scheduler, "proposer", None) if hasattr(eng, "scheduler") else None
     if prop is not None and hasattr(prop, "exit"):
         prop.exit()

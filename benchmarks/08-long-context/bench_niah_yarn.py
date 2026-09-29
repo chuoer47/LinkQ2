@@ -1,48 +1,25 @@
-"""M11: NIAH at 32K/64K/128K through the paged runtime (W4A16 + KV4) with YaRN.
+"""NIAH at 32K/64K/128K through the paged runtime (W4A16 + KV4) with YaRN.
 
-Protocol: needle-in-a-haystack with the filler / needle / question wording of
-benchmarks/01-decode-baseline/bench_niah.py (M2), so the 32K row stays
-comparable to that 底稿 — but this one drives the new runtime and the 8B W4
-pack, and it reaches past the 40960-position ceiling Qwen3-8B ships with.
-
-What each default column means:
-
-  32768:native    the model's own window. The anchor: retrieval with rope untouched.
-  32768:yarn:3.2  the same prompt, the 128K scaling applied anyway. YaRN compresses
-                  every frequency, so this is a real perturbation and not a no-op —
-                  it prices the in-window cost of the extension.
-  65536:yarn      past the native ceiling. Without YaRN these two cannot even be
-  131072:yarn     admitted: Config clamps max_model_len to hf_config's 40960.
-
-Trials are paired, not resampled: the same (depth, key, value, prompt length) list
-is replayed for every column, and needle RNG is fixed. Only rope differs. Each
-trial's haystack starts at a different phase of the filler, so no column gets a
-prefix-cache-warm prefill and every prefill number is a cold one.
-
-Not measured, deliberately:
-  * an unscaled-rope run at 64K/128K as the negative control. The ceiling clamp is
-    the only gate, so building it would mean hand-patching hf_config inside a bench;
-    the results file records that as untested instead.
-  * long-context PPL. The sliding-window protocol needs per-position logits, and at
-    131072 positions that is a 40 GB [N, vocab] tensor — the protocol does not reach.
-
-Budget (why UTIL defaults to 0.8): the int4 pool charges 36 layers x 8 KV heads x
-256 B = 73.7 KB per token, so a 128K sequence needs ~9.4 GiB of pool. On top of that,
-a chunked prefill dequantizes the whole resident prefix once per layer
-(2 x 131072 x 8 x 128 B ~= 0.5 GiB, plus the concat that adds the new rows), and
-that transient has to live in the (1 - UTIL) remainder.
-
-Env:
-  TIERS     whitespace list of CTX[:mode[:factor]]  (default as above)
-  MODEL     target                    (default models/Qwen3-8B)
-  W4        packed target dir         (default models/Qwen3-8B-qslab-w4-awq; "" = fp16)
-  CALIB     SmoothAttention file      (default results/smooth_kv4_qwen3-8b.pt; "" = off)
-  TRIALS    needle trials per depth   (default 2)
-  DEPTHS    whitespace list           (default 0.10 0.50 0.90)
-  GEN       tokens to sample          (default 32)
-  UTIL      gpu_memory_utilization    (default 0.8)
-  SEED      needle RNG                (default 2026)
-"""
+TIERS      whitespace list of CTX[:mode[:factor]] (default "32768:native 32768:yarn:3.2 65536:yarn
+             131072:yarn")
+MODEL      target (default models/Qwen3-8B)
+W4         packed target dir (default models/Qwen3-8B-qslab-w4-awq; "" = fp16)
+CALIB      SmoothAttention file (default results/smooth_kv4_qwen3-8b.pt; "" = off)
+TRIALS     needle trials per depth (default 2)
+DEPTHS     whitespace list (default "0.10 0.50 0.90")
+GEN        tokens to sample (default 32)
+UTIL       gpu_memory_utilization (default 0.8)
+SEED       needle RNG (default 2026)"""
+# Config clamps max_model_len to hf_config's own ceiling, so a column past the native window
+#   can only be admitted with YaRN.
+# Trials are paired, not resampled: the same (depth, key, value, prompt length) list is
+#   replayed for every column and the needle RNG is fixed, so only rope differs.
+# Each haystack starts at a different phase of the filler, so no column gets a prefix-cache-
+#   warm prefill.
+# A chunked prefill dequantizes the whole resident prefix once per layer, and that transient
+#   has to fit in the (1 - UTIL) remainder.
+# Long-context PPL is out of reach: per-position logits at 131072 positions are a [N, vocab]
+#   tensor the card cannot hold.
 import gc
 import math
 import os
@@ -69,7 +46,7 @@ GEN = int(os.environ.get("GEN", "32"))
 UTIL = float(os.environ.get("UTIL", "0.8"))
 SEED = int(os.environ.get("SEED", "2026"))
 
-# M2's filler, verbatim, so haystacks are the same text at the same token cost
+# haystack filler; keep this text verbatim so runs compare at the same token cost
 FILLER = ("The sun rises over the quiet hills and the village begins another "
           "ordinary day. Farmers walk along the road, birds cross the sky, "
           "and life moves at its familiar gentle pace. ")
@@ -81,11 +58,9 @@ def native_ceiling() -> int:
 
 
 def parse_tiers(native: int):
-    """CTX[:mode[:factor]] -> (ctx, mode, factor, ceiling).
-
-    `ceiling` is what the rope cache and Config's clamp will actually allow, so
-    the bench can refuse an impossible prompt before spending a prefill on it.
-    """
+    """CTX[:mode[:factor]] -> (ctx, mode, factor, ceiling)."""
+    # The ceiling is what the rope cache and Config's clamp actually allow, so an impossible
+    #   prompt is refused before a prefill is spent on it.
     out = []
     for spec in TIERS.split():
         parts = spec.split(":")
@@ -106,15 +81,11 @@ def parse_tiers(native: int):
 
 def build_prompt(tok, key: str, value: str, depth: float, hay_len: int,
                  phase: int = 0) -> list[int]:
-    """Haystack of exactly hay_len filler tokens with the needle spliced in.
-
-    `phase` shifts where the haystack starts inside the repeated filler, so
-    consecutive trials share no prefix: without it the engine's prefix cache
-    serves trials 2..n a warm haystack and the column's prefill times are
-    meaningless (the first version of this bench measured 6.7 -> 1.0 s across
-    one 32K column). Retrieval itself is unaffected — a cached prefix holds
-    the same KV.
-    """
+    """Haystack of exactly hay_len filler tokens with the needle spliced in."""
+    # Phase shifts where the haystack starts inside the repeated filler so consecutive
+    #   trials share no prefix; without it the prefix cache serves trials 2..n a warm
+    #   haystack and the prefill times are meaningless. Retrieval is unaffected — a cached
+    #   prefix holds the same KV.
     needle = f"One of the special magic numbers for {key} is: {value}. "
     fill_ids = tok.encode(FILLER)
     rep = fill_ids * (hay_len // len(fill_ids) + 3)
@@ -149,13 +120,10 @@ def run_one(eng, ids):
 
 
 def release(eng):
-    """Give the card back before the next column builds its engine.
-
-    The attention layers hold views into the int4 pool, and exit() only drops
-    the runner, so a plain `del eng` leaves the whole pool allocated and the
-    second column OOMs during its weight load (observed). This is the same
-    teardown tests/runtime/engine/test_draft_spec.py::_release does.
-    """
+    """Give the card back before the next column builds its engine."""
+    # Attention layers hold views into the int4 pool and exit() only drops the runner, so a
+    #   plain del eng leaves the whole pool allocated and the next column OOMs during its
+    #   weight load.
     for layer in eng.model_runner.model.model.layers:
         a = layer.self_attn.attn
         a.k_cache = a.v_cache = None

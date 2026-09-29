@@ -1,14 +1,4 @@
-"""Marlin backend for W4Linear: v1 pack -> Marlin repack + gemm call.
-
-Marlin (IST-DASLab, Apache 2.0) constraints:
-  infeatures % 128 == 0, outfeatures % 256 == 0, groupsize in {-1, 128}
-Repack: dequantize-free — our v1 nibble pack (LSB-first int4, symmetric,
-  zero=0) is re-quantized view: marlin expects UNSIGNED [0,15] with a +8
-  offset handled at repack time from a fake-quant fp16 weight.
-We convert from our v1 (signed nibble, scale per group of 128) to marlin's
-  B [K/16, N*16/8] int32 + s [K/g, N] fp16, following marlin's own
-  Layer.pack() math but sourcing values from the packed nibbles.
-"""
+"""Marlin backend for W4Linear: v1 pack -> Marlin repack + gemm call."""
 from __future__ import annotations
 
 import torch
@@ -20,9 +10,8 @@ _PERM = None
 
 
 def _get_perms():
-    """Marlin's thread/tile permutation tables (verbatim from upstream
-    marlin/__init__.py::_get_perms — these encode the kernel's shared-memory
-    tile layout and must match the CUDA source exactly)."""
+    """Marlin's thread/tile permutation tables, verbatim from upstream; they must match the
+    CUDA source exactly."""
     global _SCALE_PERM, _SCALE_PERM_SINGLE, _PERM
     if _PERM is not None:
         return _SCALE_PERM, _SCALE_PERM_SINGLE, _PERM
@@ -60,11 +49,7 @@ def _get_perms():
 
 def pack_v1_to_marlin(qfp: torch.Tensor, scale: torch.Tensor,
                       in_features: int, group_size: int = 128):
-    """(v1 qfp [O, I/8] uint32, scale [O, I/g] fp16) -> (B, s, workspace).
-
-    B: int32 [I/16, O*2]   (marlin's packed weight)
-    s: fp16 [I/g, O]       (marlin's permuted scales)
-    """
+    """(v1 qfp [O, I/8] uint32, scale [O, I/g] fp16) -> (B, s, workspace)."""
     O, I = scale.shape[0], in_features
     assert group_size in (-1, 128), "marlin groupsize must be -1 or 128"
     assert I % 128 == 0 and O % 256 == 0, \

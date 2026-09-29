@@ -1,10 +1,4 @@
-"""qslab runtime model primitives — vendored from nano-vllm (MIT), single-GPU.
-
-TP parallelism removed (we are batch=1 single-GPU); torch.compile decorators
-kept for the eager fast paths. The linear layers here are W4-aware: they wrap
-qslab's QuantBackend when a packed checkpoint is swapped in (M8-S3), else they
-behave as plain fp16 Linear.
-"""
+"""Qslab runtime model primitives — vendored from nano-vllm (MIT), single-GPU."""
 from __future__ import annotations
 
 import torch
@@ -70,12 +64,7 @@ class Linear(nn.Module):
 
 
 class MergedLinear(nn.Module):
-    """Two logical linears packed into one weight matrix (gate/up, QKV).
-
-    Keeps the shard-id weight_loader so the standard loader can fill the
-    parts; swap_w4_linears treats each shard as an independent quantized
-    linear (group alignment: shards are row-major blocks of the output dim).
-    """
+    """Two logical linears packed into one weight matrix (gate/up, QKV)."""
 
     def __init__(self, input_size: int, output_sizes: list[int], bias: bool = False):
         super().__init__()
@@ -133,13 +122,7 @@ class VocabEmbedding(nn.Module):
 
 
 class LMHead(VocabEmbedding):
-    """Output projection. Weight layout is HF's: [vocab, hidden].
-
-    Not a `Linear`: `Linear` is declared [out, in], and the HF checkpoint
-    stores this matrix as [vocab, hidden], so declaring it as Linear(vocab,
-    hidden) inverts the axes and only loads by accident when the model ties
-    word embeddings (Qwen3-1.7B does, Qwen3-8B does not).
-    """
+    """Output projection."""
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return F.linear(x, self.weight)

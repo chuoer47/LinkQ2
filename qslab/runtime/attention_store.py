@@ -1,17 +1,4 @@
-"""L0: slot-mapped int4 KV store — quantize one token's K/V into its slot.
-
-Per-token symmetric quantization (amax over D). Grid = (tokens*heads, words):
-each program quantizes one (token, head) pair's D channels and packs them
-into D/8 uint32 words written to the token's slot.
-
-Write counterpart of runtime/attention.py's read kernel. Layout per slot:
-k_q [D/8] uint32 + k_s fp16 (same for V); channel d lives in word d//8 at
-nibble d%8.
-
-Quantization scheme: per-token (amax over the whole head dim) for both K and
-V — per-token is the only scheme whose write is independent of other tokens,
-which slot-mapped storage requires (see design-m8.md, "per-token" decision).
-"""
+"""L0: slot-mapped int4 KV store — quantize one token's K/V into its slot."""
 from __future__ import annotations
 
 import torch
@@ -67,11 +54,7 @@ def store_kv_quant_kernel(
 
 def store_kv_quant(k: torch.Tensor, v: torch.Tensor,
                    k_cache, v_cache, slot_mapping: torch.Tensor):
-    """k, v: [N, H, D] fp16. slot_mapping: [N, H] int32 (slot per token,head).
-
-    Slot layout: slot = seq_slot_base * N_KV_HEADS + kv_head, computed by the
-    caller (model_runner) from the block table.
-    """
+    """k, v: [N, H, D] fp16."""
     N, H, D = k.shape
     kq, ks = k_cache
     vq, vs = v_cache

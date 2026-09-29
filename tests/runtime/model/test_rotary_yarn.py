@@ -1,15 +1,4 @@
-"""YaRN lock: the runtime's rope scaling must agree with transformers.
-
-The reference below is the library, not this file — every expected value is
-what `Qwen3RotaryEmbedding` produces for a Qwen3-8B-shaped config. The two
-implementations turn out to agree bit for bit (an einsum and a matmul of the
-same float32 outer product give identical angles), so the comparisons are
-exact rather than tuned tolerances; the small atol on inv_freq only absorbs
-the last ULP of the pow().
-
-Also locked here: the unscaled path must stay *identical* to the pre-YaRN
-cache, because every other milestone's numbers were measured with it.
-"""
+"""YaRN lock: the runtime's rope scaling must agree with transformers."""
 from __future__ import annotations
 
 import math
@@ -46,8 +35,7 @@ def _hf_reference(scaling: dict, max_position: int = EXTENDED_MAX):
 
 
 def _hf_cos_sin(ref: Qwen3RotaryEmbedding, positions: list[int]):
-    """HF returns (1, n, head_dim) with the half-width freqs duplicated; the
-    runtime stores the unduplicated (max_pos, 1, head_dim) cat(cos, sin)."""
+    """HF returns (1, n, head_dim) with the half-width freqs duplicated."""
     pos = torch.tensor([positions])
     dummy = torch.zeros(1, len(positions), 1)
     cos, sin = ref(dummy, pos)
@@ -82,9 +70,8 @@ class TestYarnAgainstTransformers:
         torch.testing.assert_close(row[:, half:], sin, rtol=0, atol=0)
 
     def test_scaling_actually_changes_the_rope(self):
-        """Guards against the silent-fallback failure mode: rope_scaling is a
-        dict threaded through several layers, and a typo anywhere in it yields
-        a working-looking native rope."""
+        """Guards against the silent-fallback failure mode: rope_scaling is a dict threaded
+        through several layers."""
         yarn = RotaryEmbedding(HEAD_DIM, HEAD_DIM, EXTENDED_MAX, BASE, YARN)
         native = RotaryEmbedding(HEAD_DIM, HEAD_DIM, EXTENDED_MAX, BASE, None)
         assert not torch.equal(yarn.cos_sin_cache[:NATIVE_MAX],
@@ -140,8 +127,8 @@ MODEL = "models/Qwen3-1.7B"
 @pytest.mark.skipif(not os.path.isdir(MODEL), reason="no checkpoint")
 @pytest.mark.e2e
 class TestConfigOpensTheCeiling:
-    """The rope math is useless if config.py's clamp still pins positions to
-    the native ceiling — these two lines are the whole 128K admission path."""
+    """The rope math is useless if config.py's clamp still pins positions to the native
+    ceiling."""
 
     def test_native_config_still_clamps(self):
         from qslab.runtime.config import Config

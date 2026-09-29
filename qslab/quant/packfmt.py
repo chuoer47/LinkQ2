@@ -1,14 +1,4 @@
-"""qslab_w4_v1 packed format reader/writer (docs/design-m1).
-
-Layout per quantized Linear (out_features=O, in_features=I, group=128):
-  qfp   [O, I/8]  uint32  — 8 int4 values packed per uint32, LSB-first:
-                            value i (in-feature index) lives in nibble (i%8)
-  scale [O, I/128] fp16   — per-group scale
-  zero  [O, I/128] fp16   — per-group zero point (v1: all zeros, symmetric)
-
-Container: safetensors with keys "<weight_name>.qfp/.scale/.zero" +
-config.json + calib.json.
-"""
+"""qslab_w4_v1 packed-format reader/writer."""
 from __future__ import annotations
 
 import json

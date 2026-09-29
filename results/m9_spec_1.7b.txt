@@ -1,7 +1,0 @@
-=== n-gram spec bench: Qwen3-1.7B gamma=4 tokens=256 w4=False ===
-copy     off      145.5      1.00    255
-copy     on       455.9      3.54     72   x3.13
-natural  off      145.5      1.00    255
-natural  on       212.3      1.62    157   x1.46
-random   off      140.6      1.00    255
-random   on       180.8      1.44    177   x1.29

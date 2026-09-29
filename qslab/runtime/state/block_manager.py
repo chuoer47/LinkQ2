@@ -55,13 +55,11 @@ class BlockManager:
         self.used_block_ids.remove(block_id)
         self.free_block_ids.append(block_id)
 
-    #: Prefix reuse is ON. A hit hands `prepare_prefill` a shorter chunk plus
-    #: a block_table; PagedAttention._materialize_prefix dequantizes the
-    #: cached int4 prefix back to fp16 and feeds flash-attn the full-length
-    #: K/V, repairing the M8 silent-wrong-answer bug (cu_seqlens_k claimed a
-    #: length only the pool held, so flash-attn consumed misaligned suffix
-    #: rows). A hit now differs from a cold run only by the int4 quantization
-    #: error — the already accepted KV4 noise (notes/M9).
+    # Prefix reuse is ON. A hit hands prepare_prefill a shorter chunk plus a block_table;
+    #   PagedAttention._materialize_prefix dequantizes the cached int4 prefix back to fp16
+    #   and feeds flash-attn the full-length K/V — otherwise cu_seqlens_k claims a length
+    #   only the pool holds and flash-attn reads misaligned rows. A hit differs from a cold
+    #   run only by the int4 quantization error.
     ENABLE_PREFIX_CACHE = True
 
     def can_allocate(self, seq: Sequence) -> int:
@@ -123,12 +121,11 @@ class BlockManager:
         if len(seq) % self.block_size == 1 and len(seq.block_table) < seq.num_blocks:
             seq.block_table.append(self._allocate_block())
 
-    # --- speculative verify (design-m9 §3): reserve + trim ---
-    # The verify forward stores the KV of all gamma+1 rows BEFORE attention
-    # runs, so the block table must cover position L+gamma-1 up front. After
-    # acceptance the table is trimmed back to the canonical length; rejected
-    # slots live in blocks that go back to the free list with their garbage —
-    # nobody reads past a row's own context length.
+    # --- speculative verify: reserve + trim --- The verify forward stores the KV of all
+    #   gamma+1 rows BEFORE attention runs, so the block table must cover position L+gamma-1
+    #   up front. After acceptance the table is trimmed back to the canonical length;
+    #   rejected slots live in blocks that go back to the free list with their garbage —
+    #   nobody reads past a row's own context length.
 
     def _verify_blocks(self, seq: Sequence, gamma: int) -> int:
         return (len(seq) + gamma - 1) // self.block_size + 1

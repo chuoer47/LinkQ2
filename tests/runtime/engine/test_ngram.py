@@ -1,4 +1,4 @@
-"""NGramProposer: pure-CPU lookup semantics (design-m9 §1, L3)."""
+"""NGramProposer: pure-CPU lookup semantics."""
 from qslab.runtime.engine.ngram import NGramProposer
 
 
@@ -44,7 +44,7 @@ def test_most_recent_occurrence_wins():
     assert q.propose([7, 1, 7, 2, 7]) == [2, 7]
 
 
-# ---------------- LookaheadProposer (migrated from the frozen M6 mode) -------
+# ---------------- LookaheadProposer (self-proposal mode) ----------------------
 
 def test_lookahead_first_occurrence_wins():
     from qslab.runtime.engine.ngram import LookaheadProposer
@@ -65,11 +65,7 @@ def test_lookahead_chain_extension():
 
 
 def test_lookahead_index_is_per_sequence():
-    """Batch composition must not leak into a proposal.
-
-    A single shared index would let sequence 2's tail match sequence 1's text
-    and propose from it — output depending on who else is in the batch.
-    """
+    """Batch composition must not leak into a proposal."""
     from qslab.runtime.engine.ngram import LookaheadProposer
     p = LookaheadProposer(3, 4)
     assert p.propose([1, 2, 3, 10, 1, 2, 3], seq_id=1) == [10, 1, 2, 3]

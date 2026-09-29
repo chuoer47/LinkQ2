@@ -1,7 +1,5 @@
-"""Tokenizer adapter: HF tokenizers -> qslab engine interface.
-
-The engine core only sees encode()/decode()/vocab_size, never the HF object.
-"""
+"""Tokenizer adapter: HF tokenizers -> qslab engine interface."""
+# The engine core only sees encode()/decode()/vocab_size, never the HF object.
 from __future__ import annotations
 
 from pathlib import Path

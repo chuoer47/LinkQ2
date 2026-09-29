@@ -1,32 +1,10 @@
 """Offline calibration: SmoothAttention factors + static KV scales.
 
-Implements QServe's SmoothAttention (QoQ, arXiv:2405.04532 §IV-B, Eq. 7-9)
-as a preprocessing step for qslab's KV4 cache:
-
-  lambda[layer][h, d]   per-channel smoothing factor, alpha=0.5. Outlier
-                        channels of K are divided down, and the same factor
-                        is multiplied onto Q (which is never quantized), so
-                        the attention logits are unchanged. The optimizer's
-                        hard constraint lambda_d == lambda_{d+D/2} keeps it
-                        commutative with RoPE's channel pairing.
-
-  kscale[layer][h, d]   static per-channel int4 scale for the SMOOTHED key,
-                        = max|K/lambda| / 7 over the calibration set.
-
-Why static for K: at runtime a per-token key scale cannot be recomputed when
-new tokens arrive without rewriting already-stored slots, and any write whose
-address depends on data breaks CUDA Graph capture. A frozen per-channel scale
-makes the K write a pure function of slot_mapping. V has no such constraint —
-its outliers are token-local, so it keeps a dynamic per-token scale.
-
-The factors fold into the existing per-head RMSNorm weights:
-    q_norm.weight *= lambda ;  k_norm.weight /= lambda
-so no new runtime kernel is needed.
-
 Usage:
     python scripts/build_smooth_kv.py --model models/Qwen3-1.7B \
-        --out results/smooth_kv4_qwen3-1.7b.pt
-"""
+        --out results/smooth_kv4_qwen3-1.7b.pt"""
+# Outlier channels of K are divided down, and the same factor is multiplied onto Q (which is
+#   never quantized), so the attention logits are unchanged.
 from __future__ import annotations
 
 import argparse

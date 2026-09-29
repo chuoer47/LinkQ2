@@ -1,38 +1,10 @@
-"""Batch-size throughput sweep on the current runtime.
-
-Why this file exists
--------------------
-The repo's only decode-throughput bench, benchmarks/01-decode-baseline/
-bench_throughput.py, is "batch=1 decode tokens/s" by its own docstring and
-drives the *frozen* M0-M7 QslabEngine. Every live runtime bench configures
-concurrency but never uses it (benchmarks/05-spec-ngram/bench_spec_ngram.py:60
-sets max_num_seqs=8 and then calls add_request exactly once). So no reading in
-results/ prices bs>1 on the current main line.
-
-Admissibility gate
-------------------
---selfcheck re-runs the shipped bs=1 readings before any bs>1 number is
-trusted, the same rule this project applies to every sweep harness:
-  1.7B fp16 weights + int4 KV, copy prompt, 256 tokens -> off 145.5 / ngram 455.9
-      (results/m9_spec_1.7b.txt)
-  8B W4A16KV4, copy prompt, 192 tokens -> off 97.2 tok/s
-      (results/m9_spec_8b.txt)
-A cell is only reported if the matching selfcheck line lands within TOL.
-
-Metrics
--------
-decode-window tok/s only (steps where step() returns negative; prefill is
-excluded) — the identical formula to bench_spec_ngram.py:63-78, so the two are
-comparable cell by cell. tok/s(wall) is the same run's generated-tokens / whole
-wall time (prefill included); it exists because vLLM's offline API can only
-report that protocol, and it is the column benchmarks/10-vllm-compare reads. Prompts are made distinct per request by prepending a
-random token id: BlockManager.compute_hash chains the parent hash
-(block_manager.py:43-50), so a differing block 0 disables prefix reuse for the
-whole sequence. Without that, N identical prompts would share most of their
-KV blocks and the sweep would measure caching, not batching.
-
-Env: MODEL W4 UTIL TOKENS BATCHES GAMMA SPEC TOL SELF TAG
-"""
+"""Batch-size throughput sweep on the current runtime."""
+# Prompts are made distinct per request by prepending a random token id:
+#   BlockManager.compute_hash chains the parent hash, so a differing block 0 disables prefix
+#   reuse for the whole sequence. Without it, N identical prompts would share most of their
+#   KV blocks and the sweep would measure caching, not batching.
+# Only decode-window tok/s counts (steps where step() returns a negative count); the wall-
+#   clock column exists because vLLM's offline API can only report that protocol.
 import os
 import random
 import sys
@@ -131,10 +103,8 @@ def distinct_prompts(tok, body, n, rng):
 
 
 def kv_schema(eng):
-    """Compare what allocate_kv_cache BILLS per slot (model_runner.py:123-124,
-    slot_bytes = 2*head_dim) with what it actually allocates (:139-147:
-    kq/vq int4 at head_dim/2 bytes each + vs at 2*head_dim/v_group bytes).
-    """
+    """Compare per-slot KV bytes billed by allocate_kv_cache against the bytes it actually
+    allocates."""
     mr = eng.model_runner
     cfg = mr.config
     hc = cfg.hf_config
@@ -155,11 +125,9 @@ def kv_schema(eng):
 
 
 def selfcheck(eng, tok):
-    """bs=1, shipped prompt, shipped token count, identical formula.
-
-    A miss means this harness is NOT measuring what the shipped readings
-    measured, so the bs>1 cells below would be meaningless: exit non-zero.
-    """
+    """bs=1, shipped prompt, shipped token count, identical formula."""
+    # A miss means this harness is not measuring what the shipped readings measured, so the
+    #   bs>1 cells would be meaningless: exit non-zero.
     key = "ngram" if SPEC else "off"
     want = SHIPPED.get(Path(MODEL).name, {}).get(key)
     r = measure(eng, [tok.encode(COPY_PROMPT)], N_TOKENS)

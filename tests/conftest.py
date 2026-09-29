@@ -1,13 +1,4 @@
-"""Shared pytest fixtures and markers for qslab tests.
-
-Test tiers:
-  - fast (default): pure-CPU logic (sampling math, packing, registries)
-  - gpu: needs a CUDA device (kernel numerics, cache roundtrip)
-  - e2e: needs model weights on disk (oracle alignment) — skipped if missing
-
-Run:  pytest tests/ -v                 # everything runnable here
-      pytest tests/ -m "not e2e"       # skip model-dependent tests
-"""
+"""Shared pytest fixtures and markers for qslab tests."""
 from __future__ import annotations
 
 import sys
@@ -44,13 +35,9 @@ def has_small_model() -> bool:
 
 @pytest.fixture(autouse=True)
 def _release_gpu_between_modules(request):
-    """Engine-holding test modules take turns on one 24 GB card.
-
-    Each module is torn down before the next one builds its engine, because
-    two 1.7B engines plus their KV pools do not co-reside. Threading the
-    cleanup through a module-scoped autouse fixture keeps it out of the
-    individual tests.
-    """
+    """Engine-holding test modules take turns on the single GPU."""
+    # Two 1.7B engines plus their KV pools do not co-reside, so each module is torn down
+    #   before the next one builds its engine.
     yield
     if request.node.get_closest_marker("e2e") is None:
         return

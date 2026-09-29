@@ -1,10 +1,6 @@
-"""The eager runtime path: prefill exactness and coherent generation.
-
-Strict token equality against a greedy HF decode is deliberately NOT asserted
-— see tests/runtime/engine/test_e2e_engine.py for why that is a chaotic criterion at 4-bit
-KV. What is asserted here is the prefill boundary (which must be exact) and
-that generation stays fluent.
-"""
+"""The eager runtime path: prefill exactness and coherent generation."""
+# What is asserted here is the prefill boundary (which must be exact) and that generation
+#   stays fluent.
 import gc
 
 import pytest

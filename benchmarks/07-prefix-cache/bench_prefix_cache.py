@@ -1,9 +1,4 @@
-"""M9: prefix-cache TTFT on the multi-turn shape (design: materialize route).
-
-Turn 1 (cold): full prefill. Turn 2 (hit): the whole turn-1 prefix comes
-back from the int4 pool, prefill only computes the new suffix. Reported as
-wall clock for max_tokens=1 (first token) — the realistic second-turn TTFT.
-"""
+"""prefix-cache TTFT on the multi-turn shape (design: materialize route)."""
 import os
 import sys
 import time

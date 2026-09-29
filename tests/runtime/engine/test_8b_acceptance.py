@@ -1,10 +1,6 @@
-"""M8 acceptance on the main-line 8B model: W4 + KV4 + paged runtime.
-
-Throughput only. Correctness is covered elsewhere and deliberately not by
-greedy token equality, which is a chaotic criterion at 4-bit KV (see
-tests/runtime/engine/test_e2e_engine.py); the 8B generation accuracy is measured as PPL in
-benchmarks/bench_ppl_kv.py (+0.369, 16.06 -> 16.43).
-"""
+"""8B main-line acceptance run: W4 + KV4 + paged runtime, throughput only."""
+# Correctness is not asserted by greedy token equality here; that is a chaotic criterion at
+#   4-bit KV.
 import gc
 import time
 
@@ -59,9 +55,9 @@ def test_8b_decode_throughput():
 
 
 def test_8b_speculative_verify():
-    """M9 on the main-line 8B stack (W4 + KV4 + graph + n-gram spec): the
-    verify path must produce the copy-continuation and accept > 1 token/step
-    (Marlin handles the M=5 rows; v1 GEMV would re-read weights per row)."""
+    """The 8B W4 + KV4 + graph + n-gram verify path must accept more than one token per
+    step."""
+    # Marlin handles the batched verify rows; a GEMV would re-read the weights once per row.
     eng = LLMEngine(model=MODEL, max_model_len=4096, max_num_seqs=8,
                     enforce_eager=False, gpu_memory_utilization=0.82,
                     smooth_kv=CALIB, w4=W4,
@@ -88,10 +84,9 @@ def test_8b_speculative_verify():
 
 
 def test_8b_draft_spec_acceptance():
-    """The main-line combination no test covered (TODO M10): 8B W4+KV4 driven by
-    a drafting model — two runtimes and two int4 pools on one 24 GB card, which
-    is why the memory fractions differ from the tests above. Acceptance is
-    asserted structurally, exactly as the n-gram case."""
+    """8B W4 + KV4 driven by a drafting model."""
+    # Two runtimes and two int4 pools on one GPU, so the memory fractions differ from the
+    #   n-gram tests above.
     eng = LLMEngine(model=MODEL, max_model_len=4096, max_num_seqs=4,
                     enforce_eager=False, gpu_memory_utilization=0.62,
                     smooth_kv=CALIB, w4=W4,

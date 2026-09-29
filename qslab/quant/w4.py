@@ -1,18 +1,6 @@
-"""W4 weight quantization: RTN baseline + optional AWQ scaling (docs/design-m1).
-
---algo rtn : plain group-wise round-to-nearest, symmetric
---algo awq : per-layer activation-aware scaling first (grid search over s),
-             then RTN on the rescaled weights. Equivalent transform:
-             y = (W diag(s)) (diag(s)^-1 x) — quantize W' = W diag(s),
-             the packed model must also scale inputs; in v1 we instead fold
-             the inverse scale into the *following* op only when it is a
-             Linear/norm-free path. To keep M1a simple and exact, AWQ mode
-             records per-layer `act_scales` in the packed config and the
-             loader folds diag(1/s) into the attention/MLP input at load
-             time (absorbed into the fp16 weight of the previous op where
-             legal; for LayerNorm-following layers we bake it into x via a
-             wrapper). See quantize_model(...) docs.
-"""
+"""W4 weight quantization: group-wise symmetric RTN, plus optional AWQ input scaling."""
+# AWQ mode records per-layer act_scales in the packed config; the loader folds diag(1/s)
+#   into the input.
 from __future__ import annotations
 
 import torch
@@ -51,13 +39,7 @@ def _pack_from_q(q: torch.Tensor, scale: torch.Tensor, zero: torch.Tensor,
 @torch.no_grad()
 def clip_search_quantize(w: torch.Tensor, x_absmean: torch.Tensor | None = None,
                          group_size: int = 128, n_grid: int = 40):
-    """AWQ-style: joint per-group MSE clip search (+ optional act scaling).
-
-    For each group, try clip ratios in (0,1]; pick the one minimizing the
-    weighted quantization MSE (weights-only if no activation stats, weighted
-    by x_absmean^2 when available — proxy for output error contribution).
-    Returns the packed tuple.
-    """
+    """AWQ-style: joint per-group MSE clip search (+ optional act scaling)."""
     O, I = w.shape
     w32 = w.to(torch.float32)
     wg = w32.view(O, I // group_size, group_size)
@@ -92,9 +74,7 @@ def clip_search_quantize(w: torch.Tensor, x_absmean: torch.Tensor | None = None,
 def awq_find_scales(w: torch.Tensor, x_absmean: torch.Tensor,
                     group_size: int = 128, n_grid: int = 20,
                     max_shrink: float = 1.0) -> torch.Tensor:
-    """AWQ per-channel scaling search: candidates s = mean-norm(x^a); select
-    the best candidate PER GROUP of input channels (per-group error sums),
-    assemble s [I] from per-group winners."""
+    """AWQ per-channel scaling search: candidates s = mean-norm(x^a)."""
     x = x_absmean.to(torch.float32) + 1e-6
     w32 = w.to(torch.float32)
     O, I = w.shape
@@ -128,8 +108,7 @@ def awq_find_scales(w: torch.Tensor, x_absmean: torch.Tensor,
 def quantize_weight(w: torch.Tensor, algo: str = "rtn",
                     x_absmean: torch.Tensor | None = None,
                     group_size: int = 128):
-    """Dispatch. rtn = plain symmetric; rtn_clip = per-group MSE clip search;
-    awq = act scaling + clip search."""
+    """Dispatch."""
     if algo == "rtn":
         return rtn_quantize_weight(w, group_size), None
     if algo == "rtn_clip":

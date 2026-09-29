@@ -1,9 +1,4 @@
-"""Activation statistics collector for calibration (docs/design-m1).
-
-Hooks every target Linear in a loaded HF model, feeds frozen calibration
-tokens, accumulates per-input-channel mean(|x|) and max(|x|) online.
-No raw activations stored.
-"""
+"""Activation statistics collector for AWQ/Smooth calibration."""
 from __future__ import annotations
 
 from collections import defaultdict

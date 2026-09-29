@@ -1,18 +1,4 @@
-"""KV cache: one interface, three precision implementations.
-
-M0: FP16KVCache (plain contiguous buffer, append + read).
-M2: KV8Cache (int8, per-token symmetric) and KV4Cache (int4, K per-channel /
-    V per-token per design-m2). Same update() interface returns fp16 K/V so
-    attention code is precision-agnostic.
-
-Layouts:
-  FP16/KV8: K,V [B, H, max_len, D]
-  KV4     : K stored TRANSPOSED as packed [B, H, D, max_len/8] uint32
-            (per-channel quantization groups run along the token axis);
-            V packed [B, H, max_len, D/8] uint32 (per-token groups along D).
-  Scales stored fp16 alongside: K_scale [B, H, D, max_len/g],
-  V_scale [B, H, max_len, D/g].
-"""
+"""Dense (non-paged) KV cache in fp16 / int8 / int4."""
 from __future__ import annotations
 
 import torch
@@ -21,7 +7,7 @@ PACK_G = 8  # int4 per uint32
 
 
 class BaseKVCache:
-    """Per-layer KV cache. All tensors are fp16 in M0."""
+    """Per-layer KV cache."""
 
     def __init__(self, batch: int, num_kv_heads: int, head_dim: int,
                  max_len: int, device: str, dtype: torch.dtype = torch.float16):
@@ -38,10 +24,7 @@ class BaseKVCache:
 
     def update(self, k_new: torch.Tensor, v_new: torch.Tensor,
                start: int | None = None) -> tuple[torch.Tensor, torch.Tensor]:
-        """Append new K/V of shape [B, H, T, D]; return full K/V slices.
-
-        start can be a device 0-d long tensor (CUDA-Graph safe): the write is
-        done via index_copy_-style ops that keep static addresses."""
+        """Append new K/V of shape [B, H, T, D]; return full K/V slices."""
         T = k_new.shape[2]
         if isinstance(start, torch.Tensor):
             # graph-safe path: write via masked scatter at a dynamic position
@@ -73,14 +56,11 @@ class BaseKVCache:
 
 
 class FP16KVCache(BaseKVCache):
-    """M0 default: plain fp16 buffer."""
+    """Plain fp16 buffer."""
 
 
 def _quant_sym(x: torch.Tensor, g: int):
-    """Symmetric group-wise quantize last dim by g: -> int4 in uint32 packs,
-    fp16 scale. Handles a tail group smaller than g (scale covers actual size).
-    Returns (packs uint32 [..., N_pad/8], scale fp16 [..., ceil(N/g)], N_orig).
-    """
+    """Symmetric group-wise quantize last dim by g: -> int4 in uint32 packs, fp16 scale."""
     N = x.shape[-1]
     Np = ((N + g - 1) // g) * g
     if Np != N:

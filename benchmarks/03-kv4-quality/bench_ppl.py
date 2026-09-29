@@ -1,9 +1,4 @@
-"""WikiText-2 raw PPL (docs/03 §1 protocol): sliding window stride 512.
-
-Uses the HF datasets wikitext-2-raw-v1 test split via adapters (the only
-transformers-adjacent import point). PPL computed with the engine itself so
-the number reflects the engine, not a reference implementation.
-"""
+"""WikiText-2 raw PPL: sliding window stride 512."""
 from __future__ import annotations
 
 import argparse
@@ -37,8 +32,7 @@ def gpu_snapshot() -> dict:
 @torch.inference_mode()
 def ppl_of_model(model, tok, texts: list[str], device: str,
                  reset_fn=None) -> float:
-    """Standard sliding-window PPL over concatenated token stream.
-    reset_fn: optional per-window cache reset (engine-owned caches need it)."""
+    """Standard sliding-window PPL over concatenated token stream."""
     nll_sum, n_tokens = 0.0, 0
     for text in texts:
         ids = tok.encode(text)
@@ -102,6 +96,7 @@ def main():
     }
     out = Path(args.out) if args.out else Path(
         f"results/ppl_{Path(args.model).name}_{datetime.datetime.now():%Y%m%d_%H%M%S}.json")
+    out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(report, indent=2, ensure_ascii=False))
     print(f"PPL: {ppl:.4f} | saved {out}")
 

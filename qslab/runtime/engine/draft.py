@@ -1,44 +1,15 @@
-"""Draft-model speculative proposer (chained, Qwen3-0.6B style).
-
-The n-gram proposer (ngram.py) is a CPU lookup; this one is a small model
-drafting autoregressively. Both expose propose_batch() and plug into the same
-verify machinery (design-m9 §2) — the target engine never knows which kind of
-proposer is attached.
-
-The draft is a full second runtime: its own ModelRunner (paged int4 KV pool,
-CUDA-graphed decode) and its own Scheduler. That is vLLM V1's shape (a
-separate draft worker with its own engine) rather than a bolt-on cache, and
-it means drafting reuses the same store/schedule/acceptance discipline the
-target uses — no new KV code.
-
-Proposer interface (what the engine's acceptance rule may assume):
-  ``propose_batch(seqs) -> list[list[int]]`` and, for a proposer that *samples*
-  its proposals, ``propose_probs``: a [bs*(gamma+1), V] float32 tensor whose row
-  ``i*(gamma+1)+m`` is the exact distribution proposal ``m`` of sequence ``i``
-  was drawn from (zero rows where there is no proposal). A proposer that never
-  sets the attribute is read as "proposals were deterministic", i.e. p is
-  one-hot — which is true for the n-gram/lookahead lookups and for a greedy
-  draft, and lets the ratio test collapse to the argmax check.
-
-Drafting temperature therefore matters for correctness, not just quality: this
-proposer samples, so it must report the distribution behind every token, and it
-drafts at each target sequence's own temperature rather than always greedy.
-
-Lockstep protocol (per propose_batch call, before the target's verify):
-  1. SYNC: each draft sequence is truncated to the target's committed tokens.
-     The draft's KV below the committed prefix is valid by construction: it
-     was computed causally over exactly those tokens (accepted drafts were
-     fed at their positions; rejected proposals wrote slots that the next
-     drafting overwrites, same append-only recovery as the target).
-  2. CATCHUP + DRAFT: gamma plain decode steps through the draft scheduler
-     (batched across sequences). The first step processes the target's last
-     committed token — its KV slot is the one the bonus token invalidated —
-     and each step's sample is the next proposal.
-  3. Proposals = the tokens the draft appended beyond the committed prefix.
-
-The draft's block table is trimmed on sync so can_append/may_append stay
-canonical (the target's verify trims the same way).
-"""
+"""Draft-model speculative proposer: a small model drafting autoregressively, behind the
+same propose_batch() interface as the n-gram lookup, so the target engine never knows
+which is attached."""
+# The draft is a full second runtime — its own ModelRunner and Scheduler — so drafting
+#   reuses the target's store, schedule and acceptance discipline instead of adding KV code.
+# A proposer that samples also exposes propose_probs: a [bs*(gamma+1), V] float32 tensor
+#   whose row i*(gamma+1)+m is the distribution proposal m of sequence i was drawn from.
+#   Absent means every proposal was deterministic, i.e. p is one-hot.
+# Lockstep per propose_batch call: sync each draft sequence to the target's committed
+#   tokens, run gamma plain decode steps batched across sequences, and propose whatever was
+#   appended beyond the committed prefix. The first drafting step re-queries the target's
+#   last committed token — the slot its bonus token invalidated.
 from __future__ import annotations
 
 import torch
@@ -53,17 +24,13 @@ from qslab.runtime.state.sequence import Sequence
 
 
 def _sample_rows(logits: torch.Tensor, temps: list[float]):
-    """(tokens, probs) — the sample *and* the distribution behind it.
-
-    The target's ratio test needs p exactly, so every sampling site here has to
-    hand it back. A fully greedy batch skips it: the vocab-wide softmax is the
-    price of the ratio test and has no business landing on the greedy draft
-    path that M9 benchmarked. Greedy rows take argmax rather than a draw even
-    in a mixed batch — at temperature -> 0 the softmax saturates so a draw is
-    already an argmax, but a near-tie would make the draft's choice a coin
-    flip, and a deterministic proposal is the case the one-hot fast path (and
-    the token-identical losslessness checks) relies on.
-    """
+    """(tokens, probs) — the sample and the distribution behind it."""
+    # A fully greedy batch skips the softmax and takes argmax: a near-tie would make the
+    #   draft's choice a coin flip, and the one-hot fast path assumes a deterministic
+    #   proposal.
+    # Drafting temperature is a correctness matter, not just quality: a sampling proposer
+    #   must report the distribution behind every token, and drafts at each target
+    #   sequence's own temperature.
     if max(temps) <= 1e-3:
         return logits.argmax(dim=-1), None
     t = torch.tensor(temps, dtype=torch.float32, device=logits.device)
@@ -83,10 +50,8 @@ class DraftProposer:
                  smooth_kv: str | None = None, w4: str | None = None,
                  w4_backend: str = "w4.auto"):
         self.gamma = gamma
-        # the draft never verifies or proposes speculatively itself: its own
-        # scheduler runs the plain decode path only. W4 weights are the
-        # measured lever for the proposal phase (840MB fp16 reads at 35%
-        # bandwidth -> 210MB packed; notes/M9 §5)
+        # the draft never verifies or proposes speculatively itself: its own scheduler runs
+        #   the plain decode path only.
         self.config = Config(model, max_model_len=max_model_len,
                              max_num_seqs=max_num_seqs,
                              gpu_memory_utilization=gpu_memory_utilization,
@@ -105,13 +70,10 @@ class DraftProposer:
         self._warm()
 
     def _warm(self):
-        """Compile everything the proposal path will ever run.
-
-        The engine init's graph capture warms the decode path under
-        inference_mode, but propose_batch runs outside it — dynamo treats
-        that as a different guard state and recompiles (~5s) on the FIRST
-        real proposal. A dummy propose here pays that once, before serving.
-        """
+        """Compile everything the proposal path will ever run."""
+        # propose_batch runs outside the inference_mode the graph capture warmed under, so
+        #   dynamo treats it as a new guard state and recompiles on the first real proposal;
+        #   a dummy propose pays that once, before serving.
         dummy = Sequence([0] * 8, SamplingParams(temperature=1e-6,
                                                  max_tokens=1 << 30,
                                                  ignore_eos=True))
@@ -164,16 +126,13 @@ class DraftProposer:
     # ---------------- proposal ----------------
 
     def _sync(self, d: Sequence, target: Sequence):
-        """Truncate the draft to the target's committed tokens.
-
-        No recompute is ever needed: the draft's KV below position n-1 was
-        computed causally over exactly the target's tokens (accepted drafts
-        were fed at their positions by the draft itself), the bonus token's
-        slot is rewritten by the first catchup query, and rejected-proposal
-        slots are masked by causality until the next drafting overwrites
-        them. The block table is trimmed to canonical length so the scheduler
-        appends blocks on demand (may_append is idempotent).
-        """
+        """Truncate the draft to the target's committed tokens."""
+        # No recompute is needed: the draft's KV below the committed prefix was computed
+        #   causally over exactly those tokens, the bonus token's slot is rewritten by the
+        #   first drafting query, and rejected proposals sit in slots causality hides until
+        #   the next drafting overwrites them.
+        # The block table is trimmed to canonical length so the scheduler appends blocks on
+        #   demand (may_append is idempotent).
         committed = target.token_ids
         n = len(committed)
         d.token_ids = list(committed)
@@ -230,12 +189,9 @@ class DraftProposer:
         return out
 
     def _prefill_capture(self, draft_seqs: list[Sequence]):
-        """The draft's prefill, keeping the softmax behind proposal 0.
-
-        Same calls as ``runner.run(seqs, True)`` — that path throws the
-        distribution away, and a proposal whose p is unknown cannot be
-        ratio-tested losslessly.
-        """
+        """The draft's prefill, keeping the softmax behind proposal 0."""
+        # Same calls as runner.run(seqs, True) — that path throws the distribution away, and
+        #   a proposal whose p is unknown cannot be ratio-tested losslessly.
         mr = self.runner
         input_ids, positions = mr.prepare_prefill(draft_seqs)
         logits = mr.run_model(input_ids, positions, True)
@@ -244,15 +200,12 @@ class DraftProposer:
         return tok.tolist(), probs
 
     def _assemble_probs(self, per_seq, bs: int) -> torch.Tensor | None:
-        """[bs*(gamma+1), V] rows laid out the way the verify batch is flat.
-
-        Row ``i*(gamma+1)+m`` is the distribution behind proposal ``m`` of
-        sequence ``i`` (the acceptance walk reads row m for drafts[m]). Bonus
-        rows, padded rows and greedy sequences stay zero — the acceptance mask
-        never looks at them. float32, not the fp16 the model runs in: a
-        low-probability proposal must not underflow p(x) to 0, which would
-        silently turn a rejection into a certain accept.
-        """
+        """[bs*(gamma+1), V] rows laid out the way the verify batch is flat: row
+        i*(gamma+1)+m backs proposal m of sequence i."""
+        # float32, not the model's fp16: underflowing a low-probability proposal to 0 would
+        #   turn a rejection into a certain accept.
+        # Bonus rows, padded rows and greedy sequences stay zero; the acceptance mask never
+        #   reads them.
         if not any(per_seq):
             return None
         M = self.gamma + 1
@@ -267,18 +220,12 @@ class DraftProposer:
 
     def _draft_steps(self, draft_seqs: list[Sequence],
                      rows: dict[int, list[torch.Tensor]]):
-        """gamma tight decode steps, batched across draft sequences.
-
-        This bypasses the scheduler round-trips (schedule/postprocess per
-        step) that cost more than the 0.6B forward itself: the draft window's
-        slots are reserved up front (same position-driven discipline as the
-        target's verify), each step is prepare -> graph replay -> sample ->
-        append, and the next sync trims whatever the window over-reserved.
-        Each sequence samples at its own temperature (greedy stays argmax), and
-        the distribution behind every appended proposal is recorded in `rows`.
-        Pool pressure: a sequence whose window cannot be reserved drafts
-        nothing this round (padding neutrality makes that a plain step).
-        """
+        """Gamma tight decode steps, batched across draft sequences."""
+        # Bypasses the per-step schedule/postprocess round-trips: the window's slots are
+        #   reserved up front, each step is prepare -> replay -> sample -> append, and the
+        #   next sync trims whatever the window over-reserved.
+        # Pool pressure: a sequence whose window cannot be reserved drafts nothing this
+        #   round (padding neutrality makes that a plain step).
         gamma = self.gamma
         mr = self.runner
         bm = self.sched.block_manager
