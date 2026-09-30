@@ -29,7 +29,8 @@ GETENV = re.compile(r'os\.environ\.get\(\s*["\x27]([A-Z0-9_]+)["\x27]'
 def tracked():
     out = subprocess.check_output(["git", "ls-files", "*.py"], cwd=REPO,
                                   text=True).split()
-    return [(rel, REPO / rel) for rel in out]
+    # a tracked-but-absent path is a deletion not yet committed: no prose to read
+    return [(rel, REPO / rel) for rel in out if (REPO / rel).exists()]
 
 
 def comments(path: Path):
