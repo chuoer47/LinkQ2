@@ -1,10 +1,8 @@
 """Build the vendored Marlin kernel as a torch extension."""
 import os
-import sys
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parents[2]
-SRC = REPO / "third_party" / "marlin" / "marlin"
+SOURCE_DIR = Path(__file__).resolve().parent / "csrc"
 
 from torch.utils.cpp_extension import load
 
@@ -23,7 +21,7 @@ def get_marlin():
         extra = [f"-L{nvlib}", "-lcudart", "-Xlinker", f"-rpath={nvlib}"]
     return load(
         name="qslab_marlin",
-        sources=[str(SRC / "marlin_cuda.cpp"), str(SRC / "marlin_cuda_kernel.cu")],
+        sources=[str(SOURCE_DIR / "binding.cpp"), str(SOURCE_DIR / "kernel.cu")],
         extra_cuda_cflags=["-O3"] + sum([["-I", p] for p in incs], []),
         extra_include_paths=incs,
         extra_ldflags=extra,

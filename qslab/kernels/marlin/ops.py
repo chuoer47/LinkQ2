@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import torch
 
-from qslab.kernels.marlin_ext import get_marlin
+from qslab.kernels.marlin.build import get_marlin
 
 _SCALE_PERM = None
 _PERM = None

@@ -3,7 +3,7 @@
 # Usage: conda activate qslab && ./scripts/build_kernels.sh [--clean]
 set -euo pipefail
 
-cd "$(dirname "$0")/../kernels/csrc"
+cd "$(dirname "$0")/../qslab/kernels/w4a16/tests"
 CUDA_HOME="${CUDA_HOME:-$CONDA_PREFIX}"
 NVCC="$CUDA_HOME/bin/nvcc"
 CCBIN="$CONDA_PREFIX/bin/x86_64-conda-linux-gnu-g++"
@@ -13,7 +13,7 @@ if [[ "${1:-}" == "--clean" ]]; then rm -f test_w4a16_gemm; fi
 echo "== nvcc: $("$NVCC" --version | tail -1)"
 # pip wheel headers live scattered under site-packages/nvidia (leetcuda pitfall #3)
 NVDIR="$CONDA_PREFIX/lib/python3.11/site-packages/nvidia/cuda_runtime"
-# --cudart shared: no libcudart_static.a in conda/pip (pitfall #2); wheel has
+# --cudart shared: no libcudart_static.a in conda/pip; wheel has
 # only libcudart.so.12 without the linker symlink (pitfall #5) -> -L plus rpath.
 # libcudadevrt.a missing too (pitfall #2) -> empty stub archive trick.
 NVLIB="$NVDIR/lib"
