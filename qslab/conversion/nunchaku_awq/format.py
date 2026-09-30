@@ -13,21 +13,30 @@ FORMAT_ID = "nunchaku_awq_gemv_v1"
 def pack_nunchaku_awq(values: torch.Tensor, scale: torch.Tensor,
                       zero_point: torch.Tensor
                       ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Pack affine unsigned W4 into Nunchaku's signed-nibble AWQ GEMV layout."""
+    """Pack affine unsigned W4 into the layout consumed by Nunchaku AWQ GEMV."""
     out_features, in_features = values.shape
-    if out_features % 4 or in_features % 8:
-        raise ValueError("Nunchaku AWQ GEMV requires output divisible by 4 and input by 8")
-    codes = values.to(torch.int16) - 8
-    packed = torch.zeros((out_features, in_features // 8), dtype=torch.int64,
-                         device=values.device)
-    for nibble in range(8):
-        packed |= (codes[:, nibble::8].to(torch.int64) & 0xF) << (4 * nibble)
-    qweight = packed.to(torch.int32).reshape(out_features // 4, in_features // 2)
-    scales = scale.to(torch.float16)
-    # Kernel computes signed_code * scale + scaled_zero.
-    zeros = ((8 - zero_point.to(torch.float32)) * scales.to(torch.float32))
+    if out_features % 4 or in_features % 64:
+        raise ValueError("Nunchaku AWQ GEMV requires N divisible by 4 and K by 64")
+    expected_params = (out_features, in_features // 64)
+    if tuple(scale.shape) != expected_params or tuple(zero_point.shape) != expected_params:
+        raise ValueError(f"scale and zero_point must have shape {expected_params}")
+    if values.numel() and (values.min() < 0 or values.max() > 15):
+        raise ValueError("Nunchaku AWQ expects unsigned W4 codes in [0, 15]")
+
+    # Interleave four output rows into each 16-bit value, matching TinyChat's
+    # AWQ GEMV weight layout. Keep the same representation on CPU and CUDA.
+    codes = values.to(torch.int32).reshape(-1, 4, 8)
+    packed = (codes[:, 0] | (codes[:, 1] << 4)
+              | (codes[:, 2] << 8) | (codes[:, 3] << 12))
+    qweight = (packed.reshape(out_features // 4, 4, in_features // 64, 16)
+               .permute(0, 2, 1, 3).reshape(out_features // 4, in_features)
+               .to(torch.int16).contiguous())
+
+    scales = scale.to(torch.float16).transpose(0, 1).contiguous()
+    # gemv_awq computes code * scale + scaled_zero for unsigned W4 codes.
+    zeros = (-zero_point.to(torch.float32) * scale.to(torch.float32))
     zeros = zeros.to(torch.float16).transpose(0, 1).contiguous()
-    return qweight.cpu(), scales.transpose(0, 1).contiguous().cpu(), zeros.cpu()
+    return qweight, scales, zeros
 
 
 def save_nunchaku_awq(path: Path, tensors: dict[str, tuple[torch.Tensor, ...]],
@@ -36,9 +45,9 @@ def save_nunchaku_awq(path: Path, tensors: dict[str, tuple[torch.Tensor, ...]],
     path.mkdir(parents=True, exist_ok=True)
     state = {}
     for name, (qweight, scales, zeros) in tensors.items():
-        state[f"{name}.qweight"] = qweight
-        state[f"{name}.scales"] = scales
-        state[f"{name}.zeros"] = zeros
+        state[f"{name}.qweight"] = qweight.cpu()
+        state[f"{name}.scales"] = scales.cpu()
+        state[f"{name}.zeros"] = zeros.cpu()
     for name, tensor in transforms.items():
         state[f"{name}.act_scale"] = tensor.cpu()
     save_file(state, str(path / "tensors.safetensors"))

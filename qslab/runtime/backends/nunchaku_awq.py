@@ -22,8 +22,9 @@ class NunchakuAWQLinear(torch.nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         try:
-            from nunchaku.ops.gemv import awq_gemv_w4a16_cuda
-        except ImportError as exc:
+            from nunchaku._C import ops
+            gemv_awq = ops.gemv_awq
+        except (ImportError, AttributeError) as exc:
             raise RuntimeError(
                 "Nunchaku AWQ weights require the nunchaku package with its CUDA extension"
             ) from exc
@@ -35,7 +36,7 @@ class NunchakuAWQLinear(torch.nn.Module):
         chunks = []
         for start in range(0, x2.shape[0], 8):
             part = x2[start:start + 8].contiguous()
-            chunks.append(awq_gemv_w4a16_cuda(
+            chunks.append(gemv_awq(
                 part, self.qweight, self.scales, self.zeros, part.shape[0],
                 self.out_features, self.in_features, self.group_size))
         y = torch.cat(chunks, dim=0)
