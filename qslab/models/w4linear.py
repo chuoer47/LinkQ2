@@ -20,7 +20,7 @@ class W4Linear(torch.nn.Module):
         self.backend_name = backend
 
         # importing this module registers all built-in backends
-        from qslab.quant.w4_backends import get_backend  # noqa: F401
+        from qslab.runtime.backends.w4 import get_backend  # noqa: F401
         self._backend = get_backend(
             backend, qfp, scale, group_size, in_features, out_features,
             act_scale=(self.act_scale if act_scale is not None else None))
@@ -61,45 +61,3 @@ class W4Linear(torch.nn.Module):
     def extra_repr(self) -> str:
         return (f"in={self.in_features}, out={self.out_features}, "
                 f"g={self.group_size}, backend={self.backend_name}")
-
-
-def swap_w4_linears(model: torch.nn.Module, packed_dir: str,
-                    backend: str = "w4.auto") -> int:
-    """Replace quantized Linears with W4Linear using the packed checkpoint."""
-    import json
-    from pathlib import Path
-    from qslab.quant.packfmt import load_qslab_w4
-
-    config, st, _calib = load_qslab_w4(packed_dir)
-    group = config["group_size"]
-    awq_scales = {}
-    if config["algo"] == "awq":
-        awq_file = Path(packed_dir) / "awq_scales.json"
-        if awq_file.exists():
-            awq_scales = json.loads(awq_file.read_text())
-
-    count = 0
-    for name, mod in list(model.named_modules()):
-        if not isinstance(mod, torch.nn.Linear):
-            continue
-        key = f"{name}.weight"
-        if f"{key}.qfp" not in st:
-            continue
-        dev = mod.weight.device
-        # free the fp16 weight BEFORE allocating packed tensors — keeps peak
-        # memory at (fp16 model - swapped weights + packed weights)
-        mod.weight = None  # type: ignore[assignment]
-        if dev.type == "cuda":
-            torch.cuda.empty_cache()
-        qfp = st[f"{key}.qfp"].to(dev)
-        scale = st[f"{key}.scale"].to(dev)
-        act_s = None
-        if key in awq_scales:
-            act_s = torch.tensor(awq_scales[key], device=dev, dtype=torch.float16)
-        w4 = W4Linear(qfp, scale, group, mod.in_features, mod.out_features,
-                      act_scale=act_s, backend=backend)
-        parent = model.get_submodule(name.rsplit(".", 1)[0]) if "." in name else model
-        setattr(parent, name.rsplit(".", 1)[-1], w4)
-        w4.to(dev)
-        count += 1
-    return count

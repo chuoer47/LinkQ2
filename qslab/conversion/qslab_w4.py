@@ -6,28 +6,26 @@ from pathlib import Path
 
 import torch
 from safetensors.torch import load_file, save_file
+from qslab.artifacts.schema import QuantizedTensor
 
 FORMAT_VERSION = 1
 
 
-def pack_w4(w: torch.Tensor, group_size: int = 128) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Quantize fp16 weight [O, I] -> (qfp uint32 [O, I/8], scale fp16 [O, I/g], zero fp16)."""
-    O, I = w.shape
-    assert I % group_size == 0, f"in_features {I} not divisible by group {group_size}"
-    assert I % 8 == 0, f"in_features {I} not divisible by 8"
-    w16 = w.to(torch.float16)
-    wg = w16.view(O, I // group_size, group_size)
-    amax = wg.abs().amax(dim=-1, keepdim=True)
-    scale = (amax / 7.0).clamp_min(1e-12)                      # [O, I/g, 1]
-    q = torch.clamp(torch.round(wg / scale), -8, 7).to(torch.int8)  # symmetric
-    zero = torch.zeros_like(scale.squeeze(-1))
-    # pack: [O, I/g, g] int8 -> [O, I] int4 nibbles -> uint32 words
-    qn = q.view(O, I).to(torch.uint8) & 0xF
-    qfp = torch.zeros(O, I // 8, dtype=torch.int64, device=w16.device)
+def pack_quantized_w4(weight: QuantizedTensor
+                      ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Pack logical signed W4 values into the qslab kernel nibble layout."""
+    weight.validate()
+    values = weight.values
+    out_features, in_features = values.shape
+    if not weight.symmetric or torch.count_nonzero(weight.zero_point).item():
+        raise ValueError("qslab W4 pack requires symmetric quantization")
+    qn = values.to(torch.uint8) & 0xF
+    qfp = torch.zeros(out_features, in_features // 8, dtype=torch.int64,
+                      device=values.device)
     for nib in range(8):
         qfp |= qn[:, nib::8].to(torch.int64) << (4 * nib)
-    qfp = qfp.to(torch.int32).view(torch.uint32).cpu()  # store on cpu
-    return qfp, scale.squeeze(-1).to(torch.float16).cpu(), zero.to(torch.float16).cpu()
+    qfp = qfp.to(torch.int32).view(torch.uint32).cpu()
+    return qfp, weight.scale.to(torch.float16).cpu(), weight.zero_point.to(torch.float16).cpu()
 
 
 def unpack_w4(qfp: torch.Tensor, scale: torch.Tensor, zero: torch.Tensor,

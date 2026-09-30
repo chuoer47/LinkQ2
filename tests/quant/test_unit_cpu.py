@@ -4,7 +4,8 @@ from __future__ import annotations
 import pytest
 import torch
 
-from qslab.quant.packfmt import pack_w4, unpack_w4
+from qslab.compression.algorithms.w4 import rtn
+from qslab.conversion.qslab_w4 import pack_quantized_w4, unpack_w4
 from qslab.registry import Registry
 
 
@@ -15,7 +16,8 @@ class TestPackFormat:
         torch.manual_seed(0)
         O, I, g = 64, 512, 128
         w = (torch.randn(O, I) * 0.02).to(torch.float16)
-        qfp, scale, zero = pack_w4(w, g)
+        quantized, _ = rtn(w, g)
+        qfp, scale, zero = pack_quantized_w4(quantized)
         w_hat = unpack_w4(qfp, scale, zero, I, g)
         err = (w.float() - w_hat.float()).abs().max().item()
         # int4 symmetric quantization error is bounded by half a step
@@ -24,12 +26,14 @@ class TestPackFormat:
     def test_symmetric_zero_field_is_zero(self):
         torch.manual_seed(1)
         w = (torch.randn(32, 256) * 0.05).to(torch.float16)
-        _qfp, _scale, zero = pack_w4(w, 128)
+        quantized, _ = rtn(w, 128)
+        _qfp, _scale, zero = pack_quantized_w4(quantized)
         assert torch.equal(zero, torch.zeros_like(zero))
 
     def test_pack_shape(self):
         w = torch.zeros(64, 512, dtype=torch.float16)
-        qfp, scale, _ = pack_w4(w, 128)
+        quantized, _ = rtn(w, 128)
+        qfp, scale, _ = pack_quantized_w4(quantized)
         assert qfp.shape == (64, 512 // 8)
         assert scale.shape == (64, 512 // 128)
         assert qfp.dtype == torch.uint32
@@ -77,7 +81,8 @@ class TestW4PackResidency:
     def _pack(self, O=256, I=1024, g=128):
         torch.manual_seed(3)
         w = (torch.randn(O, I) * 0.02).to(torch.float16)
-        qfp, scale, _zero = pack_w4(w, g)
+        quantized, _ = rtn(w, g)
+        qfp, scale, _zero = pack_quantized_w4(quantized)
         return qfp, scale, g, I, O
 
     def _packed_bytes(self, qfp, scale):
