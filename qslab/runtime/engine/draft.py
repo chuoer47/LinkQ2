@@ -61,7 +61,7 @@ class DraftProposer:
         # the proposer also works standalone (sequence granularity must
         # match the runner's block size)
         Sequence.block_size = self.config.kvcache_block_size
-        self.runner = ModelRunner(self.config, 0, [])
+        self.runner = ModelRunner(self.config)
         self.sched = Scheduler(self.config)
         self.drafts: dict[int, Sequence] = {}          # target seq_id -> draft seq
         # proposer interface: [bs*(gamma+1), V] rows for the last call, or None

@@ -3,7 +3,6 @@ from dataclasses import fields
 from time import perf_counter
 from tqdm.auto import tqdm
 from transformers import AutoTokenizer
-import torch.multiprocessing as mp
 
 from qslab.runtime.config import Config  # noqa: F401
 from qslab.runtime.sampling_params import SamplingParams
@@ -20,9 +19,7 @@ class LLMEngine:
         # llama-style naming: `model` is positional, everything else by field
         config = Config(model, **config_kwargs)
         Sequence.block_size = config.kvcache_block_size
-        # qslab: single-GPU runtime; nano-vllm's TP worker processes removed.
-        self.events = []
-        self.model_runner = ModelRunner(config, 0, self.events)
+        self.model_runner = ModelRunner(config)
         self.tokenizer = AutoTokenizer.from_pretrained(config.model, use_fast=True)
         config.eos = self.tokenizer.eos_token_id
         self.scheduler = Scheduler(config)

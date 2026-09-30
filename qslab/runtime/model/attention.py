@@ -13,8 +13,8 @@ from torch import nn
 from flash_attn import flash_attn_varlen_func
 
 from qslab.runtime.model.context import get_context
-from qslab.runtime.model.paged_decode import (store_kv_quant, paged_attention_decode,
-                                        materialize_kv)
+from qslab.kernels.kv4 import (materialize_kv, paged_attention_decode,
+                               store_kv_quant)
 
 
 class PagedAttention(nn.Module):

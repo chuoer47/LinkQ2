@@ -51,7 +51,7 @@ def test_w4_swaps_every_quantized_linear():
     """Embeddings, norms and an untied lm_head stay fp16; everything the checkpoint
     quantized must be replaced."""
     from qslab.models.w4linear import W4Linear
-    from qslab.quant.packfmt import load_qslab_w4
+    from qslab.conversion.qslab_w4 import load_qslab_w4
     from qslab.runtime.model.primitives import Linear as RuntimeLinear
 
     cfg, _, _ = load_qslab_w4(W4)

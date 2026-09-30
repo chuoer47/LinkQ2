@@ -1,8 +1,7 @@
-import pickle
+import json
+from pathlib import Path
+
 import torch
-import torch.distributed as dist
-from multiprocessing.synchronize import Event
-from multiprocessing.shared_memory import SharedMemory
 
 from qslab.runtime.config import Config
 from qslab.runtime.state.sequence import Sequence
@@ -14,16 +13,13 @@ from qslab.runtime.model.loader import load_model, swap_w4
 
 class ModelRunner:
 
-    def __init__(self, config: Config, rank: int, event: Event | list[Event]):
+    def __init__(self, config: Config):
         self.config = config
         hf_config = config.hf_config
         self.block_size = config.kvcache_block_size
         self.enforce_eager = config.enforce_eager
-        self.world_size = config.tensor_parallel_size
-        self.rank = rank
-        self.event = event
 
-        torch.cuda.set_device(rank)
+        torch.cuda.set_device(0)
         default_dtype = torch.get_default_dtype()
         torch.set_default_dtype(torch.float16)  # qslab: fp16 everywhere (int4 kernel is fp16)
         torch.set_default_device("cuda")
@@ -32,8 +28,12 @@ class ModelRunner:
         if config.w4:
             n = swap_w4(self.model, config.w4, backend=config.w4_backend)
             assert n > 0, f"no packed weights found under {config.w4}"
+            with (Path(config.w4) / "config.json").open() as f:
+                weight_config = json.load(f)
+            selected_backend = ("nunchaku.awq" if weight_config.get("format_id")
+                                == "nunchaku_awq_gemv_v1" else config.w4_backend)
             print(f"[w4] swapped {n} linears from {config.w4} "
-                  f"(backend={config.w4_backend})")
+                  f"(backend={selected_backend})")
         if config.compile:
             # kernel-fusion lever for the small-model draft: inductor fuses the ~1500 per-
             #   step elementwise/copy kernels; attention is dynamo-disabled so the global
@@ -50,39 +50,9 @@ class ModelRunner:
         torch.set_default_dtype(default_dtype)
 
     def exit(self):
-        if self.world_size > 1:
-            self.shm.close()
-            dist.barrier()
-            if self.rank == 0:
-                self.shm.unlink()
         if not self.enforce_eager:
             del self.graphs, self.graph_pool
         torch.cuda.synchronize()
-        pass  # single-GPU: no process group
-
-    def loop(self):
-        while True:
-            method_name, args = self.read_shm()
-            self.call(method_name, *args)
-            if method_name == "exit":
-                break
-
-    def read_shm(self):
-        assert self.world_size > 1 and self.rank > 0
-        self.event.wait()
-        n = int.from_bytes(self.shm.buf[0:4], "little")
-        method_name, *args = pickle.loads(self.shm.buf[4:n+4])
-        self.event.clear()
-        return method_name, args
-
-    def write_shm(self, method_name, *args):
-        assert self.world_size > 1 and self.rank == 0
-        data = pickle.dumps([method_name, *args])
-        n = len(data)
-        self.shm.buf[0:4] = n.to_bytes(4, "little")
-        self.shm.buf[4:n+4] = data
-        for event in self.event:
-            event.set()
 
     def call(self, method_name, *args):
         method = getattr(self, method_name, None)
@@ -415,9 +385,9 @@ class ModelRunner:
 
     def run(self, seqs: list[Sequence], is_prefill: bool) -> list[int]:
         input_ids, positions = self.prepare_prefill(seqs) if is_prefill else self.prepare_decode(seqs)
-        temperatures = self.prepare_sample(seqs) if self.rank == 0 else None
+        temperatures = self.prepare_sample(seqs)
         logits = self.run_model(input_ids, positions, is_prefill)
-        token_ids = self.sampler(logits, temperatures).tolist() if self.rank == 0 else None
+        token_ids = self.sampler(logits, temperatures).tolist()
         reset_context()
         return token_ids
 

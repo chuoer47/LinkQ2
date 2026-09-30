@@ -2,7 +2,7 @@
 import pytest
 import torch
 
-from qslab.runtime.model.paged_decode import store_kv_quant, paged_attention_decode
+from qslab.kernels.kv4 import store_kv_quant, paged_attention_decode
 
 pytestmark = pytest.mark.gpu
 

@@ -39,10 +39,13 @@ def swap_w4(model: nn.Module, packed_dir: str,
             backend: str = "w4.auto") -> int:
     """Replace runtime Linear layers with packed W4Linear ones, in place."""
     from qslab.models.w4linear import W4Linear
-    from qslab.quant.packfmt import load_qslab_w4
+    packed_dir = Path(packed_dir)
+    meta = json.loads((packed_dir / "config.json").read_text())
+    if meta.get("format_id") == "nunchaku_awq_gemv_v1":
+        return _swap_nunchaku_awq(model, packed_dir, meta)
+    from qslab.conversion.qslab_w4 import load_qslab_w4
     from qslab.runtime.model.primitives import Linear as RuntimeLinear
 
-    packed_dir = Path(packed_dir)
     config, st, _calib = load_qslab_w4(packed_dir)
     group = config["group_size"]
 
@@ -77,4 +80,34 @@ def swap_w4(model: nn.Module, packed_dir: str,
         setattr(parent, name.rsplit(".", 1)[-1], w4)
         w4.to(dev)
 
+    return len(targets)
+
+
+def _swap_nunchaku_awq(model: nn.Module, packed_dir: Path, config: dict) -> int:
+    from qslab.conversion.nunchaku_awq.format import load_nunchaku_awq
+    from qslab.runtime.backends.nunchaku_awq import NunchakuAWQLinear
+    from qslab.runtime.model.primitives import Linear as RuntimeLinear
+
+    config, state = load_nunchaku_awq(packed_dir)
+    targets = []
+    for name, mod in model.named_modules():
+        key = f"{name}.weight"
+        if isinstance(mod, RuntimeLinear) and f"{key}.qweight" in state:
+            targets.append((name, mod, key))
+    if not targets:
+        return 0
+    dev = targets[0][1].weight.device
+    for _, mod, _ in targets:
+        mod.weight = None  # type: ignore[assignment]
+    torch.cuda.empty_cache()
+    group_size = int(config["group_size"])
+    for name, mod, key in targets:
+        linear = NunchakuAWQLinear(
+            state[f"{key}.qweight"].to(dev), state[f"{key}.scales"].to(dev),
+            state[f"{key}.zeros"].to(dev), group_size, mod.input_size,
+            mod.output_size,
+            state.get(f"{key}.act_scale").to(dev)
+            if f"{key}.act_scale" in state else None)
+        parent = model.get_submodule(name.rsplit(".", 1)[0]) if "." in name else model
+        setattr(parent, name.rsplit(".", 1)[-1], linear)
     return len(targets)
