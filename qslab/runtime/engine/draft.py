@@ -47,7 +47,7 @@ class DraftProposer:
 
     def __init__(self, model: str, gamma: int, max_model_len: int,
                  max_num_seqs: int, gpu_memory_utilization: float = 0.95,
-                 smooth_kv: str | None = None, quantization: str | None = None,
+                 smooth_kv: str | None = None,
                  quant_backend: str = "gemlite"):
         self.gamma = gamma
         # the draft never verifies or proposes speculatively itself: its own scheduler runs
@@ -55,7 +55,7 @@ class DraftProposer:
         self.config = Config(model, max_model_len=max_model_len,
                              max_num_seqs=max_num_seqs,
                              gpu_memory_utilization=gpu_memory_utilization,
-                             smooth_kv=smooth_kv, quantization=quantization,
+                             smooth_kv=smooth_kv,
                              quant_backend=quant_backend, compile=True)
         # normally set by LLMEngine; keep the class invariant ourselves so
         # the proposer also works standalone (sequence granularity must

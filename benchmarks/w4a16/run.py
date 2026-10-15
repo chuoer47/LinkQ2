@@ -63,8 +63,7 @@ def report(output):
 def main():
     parser = argparse.ArgumentParser(description='小规模 W4A16 性能、显存和 real/fake 精度对照')
     parser.add_argument('--model', default='models/Qwen3-8B')
-    parser.add_argument('--artifacts', type=Path, default=Path('artifacts'))
-    parser.add_argument('--algorithms', nargs='+', default=['rtn', 'awq'])
+    parser.add_argument('--checkpoints', nargs='+', default=['models/Qwen3-8B-W4-rtn', 'models/Qwen3-8B-W4-awq'])
     parser.add_argument('--samples', default='datasets/w4a16/samples.json')
     parser.add_argument('--gpu', default='1')
     parser.add_argument('--out', type=Path)
@@ -77,14 +76,12 @@ def main():
         'git_head': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
         'dirty': bool(subprocess.check_output(['git', 'status', '--porcelain'], text=True))},
         default=str, indent=2))
-    jobs = [('fp16', None, 'fp16')]
-    jobs += [(f'{algorithm}_{mode}', str(args.artifacts / algorithm), mode)
-             for algorithm in args.algorithms for mode in ('fake', 'real')]
-    for name, artifact, mode in jobs:
-        cmd = [sys.executable, '-m', 'benchmarks.w4a16.worker', '--model', args.model,
+    jobs = [('fp16', args.model, 'fp16')]
+    jobs += [(f'{Path(checkpoint).name}_{mode}', checkpoint, mode)
+             for checkpoint in args.checkpoints for mode in ('fake', 'real')]
+    for name, checkpoint, mode in jobs:
+        cmd = [sys.executable, '-m', 'benchmarks.w4a16.worker', '--model', checkpoint,
                '--samples', args.samples, '--mode', mode, '--out', str(output / f'{name}.json')]
-        if artifact:
-            cmd += ['--artifact', artifact]
         print(f'{name}: {output / (name + ".log")}', flush=True)
         with (output / f'{name}.log').open('w') as log:
             child = subprocess.Popen(cmd, env=env, stdout=log, stderr=subprocess.STDOUT)

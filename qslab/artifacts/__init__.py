@@ -1,5 +1,5 @@
-"""Versioned, backend independent model compression artifacts."""
+"""Complete backend-independent model checkpoints."""
 from qslab.artifacts.schema import CompressionArtifact, QuantizedTensor
-from qslab.artifacts.io import load_artifact, save_artifact
+from qslab.artifacts.io import save_checkpoint
 
-__all__ = ["CompressionArtifact", "QuantizedTensor", "load_artifact", "save_artifact"]
+__all__ = ["CompressionArtifact", "QuantizedTensor", "save_checkpoint"]

@@ -6,7 +6,7 @@ from qslab.runtime.model.qwen3 import Qwen3ForCausalLM
 from qslab.runtime.execute.sampler import Sampler
 from qslab.runtime.model.context import set_context, get_context, reset_context
 from qslab.runtime.model.loader import load_model
-from qslab.runtime.quantization import replace_quantized_linears
+from qslab.runtime.quantization import load_checkpoint_weights
 
 
 class ModelRunner:
@@ -22,11 +22,12 @@ class ModelRunner:
         torch.set_default_dtype(torch.float16)  # qslab: fp16 everywhere (int4 kernel is fp16)
         torch.set_default_device("cuda")
         self.model = Qwen3ForCausalLM(hf_config)
-        load_model(self.model, config.model)
-        if config.quantization:
-            n = replace_quantized_linears(self.model, config.quantization,
+        if getattr(hf_config, "quantization_config", None):
+            n = load_checkpoint_weights(self.model, config.model,
                 backend=config.quant_backend, device="cuda:0", dtype=torch.float16)
-            print(f"[quantization] replaced {n} projections ({config.quant_backend})")
+            print(f"[quantization] loaded {n} projections ({config.quant_backend})")
+        else:
+            load_model(self.model, config.model)
         if config.compile:
             # kernel-fusion lever for the small-model draft: inductor fuses the ~1500 per-
             #   step elementwise/copy kernels; attention is dynamo-disabled so the global

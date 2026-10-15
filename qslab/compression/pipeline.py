@@ -31,11 +31,13 @@ def quantize_model(model, config: CompressionConfig, calib_ids=None):
         weights[key] = weight
         if input_scale is not None:
             scales[key] = input_scale
+        print(f"quantized {key}", flush=True)
     return CompressionArtifact(weights, {"input_scale": scales} if scales else {})
 
 
 def compress_checkpoint(model_path, config: CompressionConfig):
-    model = build_hf_causal_lm(model_path, device=config.device)
+    model = build_hf_causal_lm(model_path, device=config.device, dtype='auto')
+    print(f"loaded {model_path}: dtype={next(model.parameters()).dtype}", flush=True)
     calib_ids = None
     if QUANTIZERS[config.algorithm].requires_calibration and config.calibration_path:
         calib_ids = torch.load(Path(config.calibration_path), map_location="cpu", weights_only=True)["token_ids"]

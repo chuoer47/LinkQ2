@@ -1,43 +1,43 @@
 # W4A16 主链路
 
-## 离线
+## 离线量化
 
-`qslab/compression` 使用原模型和可选校准 token 产生量化结果。RTN、RTN clip、AWQ 对称、AWQ affine 不导入执行后端或 kernel。
+`qslab/compression` 从原始 BF16/FP16 checkpoint 加载模型。四个算法各自实现 `WeightQuantizer.quantize()`；pipeline 根据 `requires_calibration` 决定是否用输入 token 重新收集激活。
+算法仅产生逻辑整数、scale、zero point 和可选 input_scale，不导入在线后端或 kernel。
 
-四个算法分别位于 `compression/algorithms` 的独立文件中，统一继承 `WeightQuantizer` 并实现 `quantize()`。pipeline 根据算法的 `requires_calibration` 决定是否收集激活，CLI 从同一算法字典生成选项与默认分组大小。接口及参数见该目录 README。
+## 完整 checkpoint
 
-`qslab/artifacts` 负责离线产物读写：
+`qslab.artifacts.save_checkpoint(artifact, model_path, output)` 按原模型分片逐个写出完整权重包，使用 safetensors 保存张量，使用标准库复制配置和 tokenizer 等原有文件。
+
+- 原始权重名称及分片映射保持一致。
+- 量化权重仍使用原始 `<模块>.weight` 名称，INT8 存储逻辑 W4 数值。
+- `<原权重名>.scale` 为 FP16；非对称量化增加 `.zero_point`；有输入缩放则增加 `.input_scale`。
+- 辅助张量与主权重同分片，加入同一个 `model.safetensors.index.json`，更新实际 `total_size`。单文件源模型继续使用单文件。
+- 未量化权重保持源 checkpoint 的数值和 dtype。
+- tokenizer、生成配置等原有文件随包保存。
+
+仅在 `config.json` 增加：
 
 ```json
-{"version": 1, "group_size": 128, "symmetric": true}
+"quantization_config": {"bits": 4, "group_size": 128, "symmetric": true}
 ```
 
-每个产物统一 group size 与对称性。safetensors 保存：
+位宽表示逻辑量化精度；紧凑 int4 布局由在线后端加载时生成。包内不绑定具体 kernel。
 
-- `<模块>.weight.values`：形状 `[N,K]`，int8 逻辑值；对称为 −8…7，非对称为 0…15。
-- `<模块>.weight.scale`：`[N,K/group_size]`，FP16。
-- `<模块>.weight.zero_point`：仅非对称量化需要。
-- `transforms.input_scale.<模块>.weight`：可选的输入缩放 `[K]`。
+## 在线加载
 
-这里的 int8 是便于后端处理的离线逻辑表示；GPU 常驻权重在加载时打包为 int4。模型结构从原始 HF checkpoint 读取，算法及实验来源记录在实验结果中，不扩展运行时协议。
+`qslab/runtime/quantization.py` 独立读取完整包的配置与统一索引，不导入离线算法或离线对象。
+`load_checkpoint_weights()` 替换量化 Linear，并加载其余浮点参数。
 
-## 在线
+HF 使用 `adapters.model_builder.build_quantized_causal_lm()`：通过 Transformers 从配置构造模型、通过 Accelerate 创建空参数并加载张量。只需量化模型目录；`fake=True` 用于构建配对的浮点反量化参考。
 
-`qslab/runtime/quantization.py` 用 safetensors 加载逻辑张量，按名称替换模型中的 Linear，不导入离线算法或离线对象。
+项目引擎同样只接收模型目录，检测包内 `quantization_config` 并调用同一加载函数。
 
-`qslab/models/quant_linear.py` 只有一个抽象基类：`from_quantized`、`forward` 和权重字节统计。后端通过一个简单工厂选择。
+`QuantLinear` 定义后端接口；`GemLiteLinear` 负责打包，所有常驻张量注册为 buffer。forward 按需执行输入缩放，调用融合反量化与矩阵计算算子。
+kernel 来自 GemLite 0.4.8，计算源码保持原样。M=1 使用 revsplitK GEMV，2≤M≤64 使用 splitK GEMM，M>64 使用 GEMM。
 
-`qslab/runtime/backends/gemlite.py` 是正式后端：
+## 验证
 
-1. 加载时将对称整数偏移到 unsigned int4，调用移植打包函数；scale/zero 转为 kernel 所需布局。
-2. packed/scales/zeros/input_scale 全部注册为 buffer，forward 每次读取当前 buffer，支持 CPU/GPU 移动；计算 dtype 在构造时指定。
-3. 替换前释放原浮点投影；模型不保留完整浮点副本或离线整数张量。
-4. forward 按需进行 AWQ 输入缩放，然后调用融合算子，不生成完整反量化权重矩阵。
-
-`qslab/kernels/gemlite` 仅包含 GemLite 0.4.8 的打包、三条 FP16/BF16×W4 路径和必要工具。M=1 使用 revsplitK GEMV，2≤M≤64 使用 splitK GEMM，M>64 使用 GEMM。源码、许可证及来源见该目录 README。
-
-HF 模型与项目引擎都调用同一个替换函数。引擎通过 `quantization` 和 `quant_backend` 配置后端；本轮的性能与 PPL 验证使用 HF，普通 FP16 KV cache。
-
-## 验证入口
-
-`benchmarks/w4a16` 提供单算子原包比较与小规模模型对照；`tests/quant` 验证产物、替换、移动与显存释放。所有命令和口径见 benchmark 中文 README。
+`tests/quant` 覆盖量化算法、完整分片、浮点权重保留、删除测试原目录后的独立加载，以及设备移动和释放。
+`benchmarks.w4a16.validate_checkpoint` 验证实际完整包，并配对比较 real/fake 的小样本 PPL、probe 与短 decode。
+`benchmarks.w4a16.run` 测量 HF prefill/decode 性能，单算子对照使用 `benchmarks.w4a16.operator`。

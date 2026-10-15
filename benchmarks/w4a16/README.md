@@ -11,16 +11,16 @@ conda activate "$PWD/.conda"
 python -m benchmarks.w4a16.run --gpu 1
 ```
 
-默认需要 `models/Qwen3-8B`、`artifacts/rtn`、`artifacts/awq`、`datasets/w4a16/samples.json`。
-每个产物目录包含 `manifest.json` 与 `tensors.safetensors`。
-也可用 `--model`、`--artifacts`、`--algorithms rtn awq awq_affine`、`--samples`、`--out` 指定路径和范围。
+默认需要 `models/Qwen3-8B`、`models/Qwen3-8B-W4-rtn`、`models/Qwen3-8B-W4-awq`、`datasets/w4a16/samples.json`。
+量化模型目录是完整 checkpoint，包含原有模型配置、tokenizer、全部权重分片与统一索引。
+可用 `--model` 指定浮点基线，用 `--checkpoints <目录1> <目录2>` 指定量化模型，另有 `--samples`、`--out`。
 各模式顺序使用独立子进程；Ctrl+C 会停止当前子进程。
 
 ## 测量范围与口径
 
 - 默认顺序为 FP16、RTN fake/real、AWQ fake/real，不重新校准和量化。
 - PPL 固定 WikiText-2 的 8 段×512 token，4088 个预测目标，所有模式共用同一 token 文件；仅用于小样本对照。
-- fake 在加载时用 FP32 还原逻辑权重，折叠 input_scale 后转为 FP16 Linear；运行时常驻 FP16 权重。
+- fake 仅从完整量化目录构造模型，在加载时用 FP32 还原逻辑权重，折叠 input_scale 后转为 FP16 Linear；运行时常驻 FP16 权重。
 - real 在加载时将逻辑整数打包成 W4，运行时融合反量化和计算；AWQ 的输入缩放在 forward 中执行。
 - prefill：batch=1，128/512 token，普通 HF eager、无 KV cache；预热 2 次、测量 5 次。
 - decode：128 token 上下文，再输入固定 32 token，普通 HF FP16 KV cache；预热 2 轮、测量 5 轮。每轮逐步同步，报告轮均值的中位数和原始数据。
@@ -54,3 +54,18 @@ CUDA_VISIBLE_DEVICES=1 python -m pytest tests/quant/test_quantization.py -m gpu 
 ```
 
 GPU 测试验证对称/非对称产物、真实模型替换、CPU/GPU 移动、源权重释放与模型释放后的显存回收。
+
+## 完整包验证
+
+```bash
+python -m benchmarks.w4a16.validate_checkpoint --gpu 1 \
+  --checkpoints models/Qwen3-8B-W4-rtn models/Qwen3-8B-W4-awq \
+  --out results/checkpoint_validation
+```
+
+此入口只读取新 checkpoint，不接收原始模型路径，使用 HF 离线模式。
+检查索引、全部分片、INT8 存储和 tokenizer，然后在独立进程中配对运行 fake/real。
+PPL 使用同样的 8×512 token，额外检查 32 token 上下文和 8 步 decode；不运行性能重复测量。
+报告、逐样本 NLL、logits 差异和显存记录写入结果目录。
+
+实际新链路生成与验证结果见 [完整 checkpoint 验证记录](CHECKPOINT_RESULTS.md)。

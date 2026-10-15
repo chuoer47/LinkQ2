@@ -7,7 +7,7 @@ from qslab.runtime.sampling_params import SamplingParams
 pytestmark = pytest.mark.e2e
 
 MODEL = "models/Qwen3-1.7B"
-W4 = "artifacts/qwen3-1.7b-awq"
+W4 = "models/Qwen3-1.7B-W4-awq"
 CALIB = "results/smooth_kv4_qwen3-1.7b.pt"
 PROMPT = " The capital of France is"
 ORACLE = [12095, 13, 576, 6722, 315, 9856, 374, 19846, 13, 576, 6722, 315,
@@ -15,7 +15,7 @@ ORACLE = [12095, 13, 576, 6722, 315, 9856, 374, 19846, 13, 576, 6722, 315,
 
 
 def _engine(**kw):
-    return LLMEngine(model=MODEL, max_model_len=4096, max_num_seqs=8,
+    return LLMEngine(model=kw.pop("model", MODEL), max_model_len=4096, max_num_seqs=8,
                      enforce_eager=True, gpu_memory_utilization=0.4,
                      smooth_kv=CALIB, **kw)
 
@@ -35,7 +35,7 @@ def _release(eng):
 def test_w4_runtime_matches_fp16_reference():
     """The whole point of the integration: the packed W4 weights drive the paged runtime and
     still reproduce the fp16 oracle."""
-    eng = _engine(quantization=W4)
+    eng = _engine(model=W4)
     try:
         out = eng.generate([PROMPT], SamplingParams(temperature=1e-6, max_tokens=16),
                            use_tqdm=False)
@@ -56,7 +56,7 @@ def test_w4_swaps_every_quantized_linear():
 
     expected = len(QuantizedWeights(W4).names)
 
-    eng = _engine(quantization=W4)
+    eng = _engine(model=W4)
     try:
         model = eng.model_runner.model
         n_w4 = sum(1 for m in model.modules() if isinstance(m, QuantLinear))

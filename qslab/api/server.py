@@ -263,7 +263,6 @@ def main(argv=None):
     p = argparse.ArgumentParser(prog="python -m qslab.api.server",
                                 description="OpenAI-compatible server over the qslab runtime")
     p.add_argument("--model", required=True)
-    p.add_argument("--quantization", default=None)
     p.add_argument("--quant-backend", choices=["gemlite"], default="gemlite")
     p.add_argument("--smooth-kv", default=None)
     p.add_argument("--spec", default=None, choices=[None, "ngram", "lookahead", "draft"])
@@ -289,7 +288,7 @@ def main(argv=None):
 
     from aiohttp import web
     from qslab.api.llm import LLM
-    llm = LLM(args.model, quantization=args.quantization, quant_backend=args.quant_backend,
+    llm = LLM(args.model, quant_backend=args.quant_backend,
               smooth_kv=args.smooth_kv, spec=args.spec, spec_gamma=args.spec_gamma,
               draft=args.draft, max_num_seqs=args.max_num_seqs,
               max_model_len=args.max_model_len, gpu_memory_utilization=args.util)

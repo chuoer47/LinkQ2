@@ -40,12 +40,12 @@ RTN 可配置 `clip_ratio`；RTNClip 可配置 `n_grid`；AWQ 与 AWQAffine 可�
 
 新增算法时增加一个实现文件，继承基类，再加入 `QUANTIZERS` 字典。pipeline 与 CLI 从该字典选择算法。
 
-离线产物仍通过 `qslab.artifacts.save_artifact` 保存。CLI 示例：
+完整 checkpoint 通过 `qslab.artifacts.save_checkpoint(artifact, model_path, output)` 保存，沿用源模型权重名与分片。CLI 示例：
 
 ```bash
 python -m qslab.compression --model models/Qwen3-8B \
   --algorithm awq --calibration datasets/w4a16/calibration.pt \
-  --out artifacts/awq
+  --out models/Qwen3-8B-W4-awq
 ```
 
 小规模测试：

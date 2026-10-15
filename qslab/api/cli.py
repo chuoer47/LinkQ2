@@ -24,7 +24,6 @@ def build_parser() -> argparse.ArgumentParser:
                    help="seed torch before generating (temperature runs)")
 
     # weight + KV quantization
-    g.add_argument("--quantization", default=None, help="logical quantized weight directory")
     g.add_argument("--quant-backend", default="gemlite",
                    choices=["gemlite"])
     g.add_argument("--smooth-kv", default=None,
@@ -40,7 +39,6 @@ def build_parser() -> argparse.ArgumentParser:
                    help="shrink the draft window when proposals keep failing "
                         "(--spec draft only: the lookups cost nothing per draft)")
     g.add_argument("--draft", default=None, help="draft model dir (with --spec draft)")
-    g.add_argument("--draft-quantization", default=None, help="logical quantized weights for the draft")
 
     # runtime sizing
     g.add_argument("--max-model-len", type=int, default=4096)
@@ -77,13 +75,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.compile:
         runtime["compile"] = True
 
-    llm = LLM(args.model, quantization=args.quantization,
-              quant_backend=args.quant_backend, smooth_kv=args.smooth_kv,
+    llm = LLM(args.model, quant_backend=args.quant_backend, smooth_kv=args.smooth_kv,
               spec=args.spec, spec_gamma=args.spec_gamma,
               spec_ngram_size=args.spec_ngram_size,
               spec_lookahead_span=args.spec_lookahead_span,
               spec_adaptive_gamma=args.spec_adaptive_gamma,
-              draft=args.draft, draft_quantization=args.draft_quantization, **runtime)
+              draft=args.draft, **runtime)
     p = {"max_tokens": args.max_tokens}
     if args.temperature is not None:
         p["temperature"] = args.temperature

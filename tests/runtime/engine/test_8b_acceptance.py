@@ -13,7 +13,7 @@ from qslab.runtime.sampling_params import SamplingParams
 pytestmark = pytest.mark.e2e
 
 MODEL = "models/Qwen3-8B"
-W4 = "artifacts/awq"
+W4 = "models/Qwen3-8B-W4-awq"
 CALIB = "results/smooth_kv4_qwen3-8b.pt"
 PROMPT = " The capital of France is"
 MAX_TOKENS = 24
@@ -35,9 +35,9 @@ def _release(eng):
 
 
 def test_8b_decode_throughput():
-    eng = LLMEngine(model=MODEL, max_model_len=4096, max_num_seqs=8,
+    eng = LLMEngine(model=W4, max_model_len=4096, max_num_seqs=8,
                     enforce_eager=False, gpu_memory_utilization=0.82,
-                    smooth_kv=CALIB, quantization=W4)
+                    smooth_kv=CALIB)
     try:
         eng.generate([PROMPT], SamplingParams(temperature=1e-6, max_tokens=8),
                      use_tqdm=False)
@@ -58,9 +58,9 @@ def test_8b_speculative_verify():
     """The 8B W4 + KV4 + graph + n-gram verify path must accept more than one token per
     step."""
     # Batched verification uses the fused GEMM path.
-    eng = LLMEngine(model=MODEL, max_model_len=4096, max_num_seqs=8,
+    eng = LLMEngine(model=W4, max_model_len=4096, max_num_seqs=8,
                     enforce_eager=False, gpu_memory_utilization=0.82,
-                    smooth_kv=CALIB, quantization=W4,
+                    smooth_kv=CALIB,
                     spec_method="ngram", spec_num_drafts=4)
     try:
         prompt = (" The capital of France is Paris. The capital of Germany is Berlin. "
@@ -87,9 +87,9 @@ def test_8b_draft_spec_acceptance():
     """8B W4 + KV4 driven by a drafting model."""
     # Two runtimes and two int4 pools on one GPU, so the memory fractions differ from the
     #   n-gram tests above.
-    eng = LLMEngine(model=MODEL, max_model_len=4096, max_num_seqs=4,
+    eng = LLMEngine(model=W4, max_model_len=4096, max_num_seqs=4,
                     enforce_eager=False, gpu_memory_utilization=0.62,
-                    smooth_kv=CALIB, quantization=W4,
+                    smooth_kv=CALIB,
                     spec_method="draft", spec_num_drafts=4,
                     draft_model="models/Qwen3-0.6B",
                     draft_gpu_memory_utilization=0.9)

@@ -32,7 +32,7 @@ class LLMEngine:
                 config.draft_model, config.spec_num_drafts,
                 config.max_model_len, config.max_num_seqs,
                 gpu_memory_utilization=config.draft_gpu_memory_utilization,
-                smooth_kv=calib, quantization=config.draft_quantization,
+                smooth_kv=calib,
                 quant_backend=config.draft_quant_backend)
         atexit.register(self.exit)
 

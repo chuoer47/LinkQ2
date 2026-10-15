@@ -33,7 +33,6 @@ class LLM:
     """Unified qslab entry point over the runtime."""
 
     def __init__(self, model_path: str | Path, *,
-                 quantization: str | None = None,               # quantization artifact directory
                  quant_backend: str = "gemlite",         # local fused W4A16 backend
                  smooth_kv: str | None = None,        # SmoothAttention calibration
                  spec: str | None = None,             # ngram | lookahead | draft
@@ -42,7 +41,6 @@ class LLM:
                  spec_lookahead_span: int = 8,
                  spec_adaptive_gamma: bool = False,
                  draft: str | None = None,            # draft model dir (spec="draft")
-                 draft_quantization: str | None = None,
                  draft_quant_backend: str = "gemlite",
                  **runtime_config):
         from qslab.runtime.engine.llm_engine import LLMEngine
@@ -52,12 +50,12 @@ class LLM:
         elif draft:
             raise ValueError(f"draft model given but spec={spec!r} — use spec='draft'")
         self._engine = LLMEngine(
-            self.model_path, quantization=quantization, quant_backend=quant_backend, smooth_kv=smooth_kv,
+            self.model_path, quant_backend=quant_backend, smooth_kv=smooth_kv,
             spec_method=spec, spec_num_drafts=spec_gamma,
             spec_ngram_size=spec_ngram_size,
             spec_lookahead_span=spec_lookahead_span,
             spec_adaptive_gamma=spec_adaptive_gamma,
-            draft_model=draft, draft_quantization=draft_quantization,
+            draft_model=draft,
             draft_quant_backend=draft_quant_backend, **runtime_config)
 
     # ------------------------------------------------------------------
