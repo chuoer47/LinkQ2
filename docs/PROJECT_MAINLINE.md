@@ -4,6 +4,8 @@
 
 `qslab/compression` 使用原模型和可选校准 token 产生量化结果。RTN、RTN clip、AWQ 对称、AWQ affine 不导入执行后端或 kernel。
 
+四个算法分别位于 `compression/algorithms` 的独立文件中，统一继承 `WeightQuantizer` 并实现 `quantize()`。pipeline 根据算法的 `requires_calibration` 决定是否收集激活，CLI 从同一算法字典生成选项与默认分组大小。接口及参数见该目录 README。
+
 `qslab/artifacts` 负责离线产物读写：
 
 ```json

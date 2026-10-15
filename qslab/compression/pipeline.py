@@ -11,15 +11,15 @@ from .config import CompressionConfig
 
 
 def quantize_model(model, config: CompressionConfig, calib_ids=None):
-    needs_calibration = config.algorithm in ("awq", "awq_affine")
-    if needs_calibration and calib_ids is None:
+    quantizer = QUANTIZERS[config.algorithm]()
+    if quantizer.requires_calibration and calib_ids is None:
         raise ValueError("activation-aware quantization requires calibration token IDs")
-    activations = collect_activations(model, calib_ids, config.device) if needs_calibration else {}
+    activations = collect_activations(model, calib_ids, config.device) if quantizer.requires_calibration else {}
     weights, scales = {}, {}
     for name, module in model.named_modules():
         if not isinstance(module, torch.nn.Linear) or not name.endswith(config.target_suffixes):
             continue
-        weight, input_scale = QUANTIZERS[config.algorithm](module.weight.detach(),
+        weight, input_scale = quantizer.quantize(module.weight.detach(),
             group_size=config.group_size, activation_absmean=activations.get(name))
         if config.artifact_device:
             weight.values = weight.values.to(config.artifact_device)
@@ -37,8 +37,6 @@ def quantize_model(model, config: CompressionConfig, calib_ids=None):
 def compress_checkpoint(model_path, config: CompressionConfig):
     model = build_hf_causal_lm(model_path, device=config.device)
     calib_ids = None
-    if config.algorithm in ("awq", "awq_affine"):
-        if not config.calibration_path:
-            raise ValueError("provide a calibration token file")
+    if QUANTIZERS[config.algorithm].requires_calibration and config.calibration_path:
         calib_ids = torch.load(Path(config.calibration_path), map_location="cpu", weights_only=True)["token_ids"]
     return quantize_model(model, config, calib_ids)
