@@ -1,5 +1,4 @@
 import atexit
-from dataclasses import fields
 from time import perf_counter
 from tqdm.auto import tqdm
 from transformers import AutoTokenizer
@@ -14,10 +13,7 @@ from qslab.runtime.execute.model_runner import ModelRunner
 class LLMEngine:
 
     def __init__(self, model, **kwargs):
-        config_fields = {field.name for field in fields(Config)}
-        config_kwargs = {k: v for k, v in kwargs.items() if k in config_fields}
-        # llama-style naming: `model` is positional, everything else by field
-        config = Config(model, **config_kwargs)
+        config = Config(model, **kwargs)
         Sequence.block_size = config.kvcache_block_size
         self.model_runner = ModelRunner(config)
         self.tokenizer = AutoTokenizer.from_pretrained(config.model, use_fast=True)
@@ -36,8 +32,8 @@ class LLMEngine:
                 config.draft_model, config.spec_num_drafts,
                 config.max_model_len, config.max_num_seqs,
                 gpu_memory_utilization=config.draft_gpu_memory_utilization,
-                smooth_kv=calib, w4=config.draft_w4,
-                w4_backend=config.draft_w4_backend)
+                smooth_kv=calib, quantization=config.draft_quantization,
+                quant_backend=config.draft_quant_backend)
         atexit.register(self.exit)
 
     def exit(self):

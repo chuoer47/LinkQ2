@@ -7,7 +7,7 @@ from qslab.api import LLM, SamplingParams
 pytestmark = pytest.mark.e2e
 
 MODEL = "models/Qwen3-1.7B"
-W4 = "models/Qwen3-1.7B-qslab-w4-awq2"
+W4 = "artifacts/qwen3-1.7b-awq"
 CALIB = "results/smooth_kv4_qwen3-1.7b.pt"
 COPY_PROMPT = (" The capital of France is Paris. The capital of Germany is Berlin. "
                "The capital of Italy is Rome. The capital of France is")
@@ -36,21 +36,20 @@ def _release(llm):
 
 
 def test_generate_with_w4_and_int4_kv():
-    llm = _llm(w4=W4)
+    llm = _llm(quantization=W4)
     try:
         res = llm.generate(COPY_PROMPT, SamplingParams(max_tokens=16))
         assert len(res["token_ids"]) == 16
         assert res["text"].strip()            # decodes to something printable
         assert llm.kv_memory_bytes() > 0
         model = llm._engine.model_runner.model
-        w4 = [m for m in model.modules() if type(m).__name__ == "W4Linear"]
+        w4 = [m for m in model.modules() if type(m).__name__ == "GemLiteLinear"]
         assert len(w4) > 100, f"only {len(w4)} linears were swapped"
         m = w4[0]
         # one packed copy = int4 nibbles plus per-group fp16 scales
         packed = (m.in_features * m.out_features // 2
                   + m.in_features // m.group_size * m.out_features * 2)
-        # Marlin's repack is the same size as the v1 pack and replaces it, so the budget is
-        #   ONE packed copy — holding both would double it
+        # Only one packed weight copy should remain resident.
         assert m.weight_memory_bytes() <= packed * 1.02
         assert m.weight_memory_bytes() < m.in_features * m.out_features * 2
         # the embeddings and lm_head stay fp16, so the whole model is not 1/4
@@ -67,7 +66,7 @@ def test_greedy_is_the_default_and_zero_is_not_a_shortcut():
 
 
 def test_speculative_stats_are_reported_and_reset():
-    llm = _llm(w4=W4, spec="ngram", spec_gamma=4)
+    llm = _llm(quantization=W4, spec="ngram", spec_gamma=4)
     try:
         res = llm.generate(COPY_PROMPT, SamplingParams(max_tokens=48))
         st = res["stats"]
@@ -85,7 +84,7 @@ def test_speculative_stats_are_reported_and_reset():
 
 
 def test_no_speculation_reports_no_stats():
-    llm = _llm(w4=W4)
+    llm = _llm(quantization=W4)
     try:
         assert llm.generate(" Water freezes at", SamplingParams(max_tokens=8))["stats"] == {}
     finally:
@@ -93,7 +92,7 @@ def test_no_speculation_reports_no_stats():
 
 
 def test_batch_and_argument_guards():
-    llm = _llm(w4=W4)
+    llm = _llm(quantization=W4)
     try:
         out = llm.generate_batch([COPY_PROMPT, " Water freezes at"],
                                  SamplingParams(max_tokens=8))
@@ -107,7 +106,7 @@ def test_batch_and_argument_guards():
 
 
 def test_lookahead_mode_is_reachable_from_the_facade():
-    llm = _llm(w4=W4, spec="lookahead", spec_gamma=4, spec_lookahead_span=8)
+    llm = _llm(quantization=W4, spec="lookahead", spec_gamma=4, spec_lookahead_span=8)
     try:
         assert llm._engine.scheduler.proposer.__class__.__name__ == "LookaheadProposer"
         res = llm.generate(COPY_PROMPT, SamplingParams(max_tokens=32))

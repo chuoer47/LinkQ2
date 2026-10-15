@@ -4,7 +4,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from qslab.runtime.engine.llm_engine import LLMEngine
 from qslab.runtime.sampling_params import SamplingParams as _RuntimeParams
 
 # The runtime has no greedy branch — it always samples, and dividing the logits
@@ -34,8 +33,8 @@ class LLM:
     """Unified qslab entry point over the runtime."""
 
     def __init__(self, model_path: str | Path, *,
-                 w4: str | None = None,               # qslab_w4_v1 packed dir
-                 w4_backend: str = "w4.auto",         # w4.v1 | w4.marlin | w4.auto
+                 quantization: str | None = None,               # quantization artifact directory
+                 quant_backend: str = "gemlite",         # local fused W4A16 backend
                  smooth_kv: str | None = None,        # SmoothAttention calibration
                  spec: str | None = None,             # ngram | lookahead | draft
                  spec_gamma: int = 4,
@@ -43,22 +42,23 @@ class LLM:
                  spec_lookahead_span: int = 8,
                  spec_adaptive_gamma: bool = False,
                  draft: str | None = None,            # draft model dir (spec="draft")
-                 draft_w4: str | None = None,
-                 draft_w4_backend: str = "w4.v1",
+                 draft_quantization: str | None = None,
+                 draft_quant_backend: str = "gemlite",
                  **runtime_config):
+        from qslab.runtime.engine.llm_engine import LLMEngine
         self.model_path = str(model_path)
         if spec == "draft":
             assert draft, "spec='draft' needs draft=<model dir>"
         elif draft:
             raise ValueError(f"draft model given but spec={spec!r} — use spec='draft'")
         self._engine = LLMEngine(
-            self.model_path, w4=w4, w4_backend=w4_backend, smooth_kv=smooth_kv,
+            self.model_path, quantization=quantization, quant_backend=quant_backend, smooth_kv=smooth_kv,
             spec_method=spec, spec_num_drafts=spec_gamma,
             spec_ngram_size=spec_ngram_size,
             spec_lookahead_span=spec_lookahead_span,
             spec_adaptive_gamma=spec_adaptive_gamma,
-            draft_model=draft, draft_w4=draft_w4,
-            draft_w4_backend=draft_w4_backend, **runtime_config)
+            draft_model=draft, draft_quantization=draft_quantization,
+            draft_quant_backend=draft_quant_backend, **runtime_config)
 
     # ------------------------------------------------------------------
     @property
@@ -105,6 +105,6 @@ class LLM:
         model = self._engine.model_runner.model
         packed = sum(m.weight_memory_bytes() for m in model.modules()
                      if hasattr(m, "weight_memory_bytes"))
-        # a swapped W4Linear keeps its bytes in buffers or in its backend's
+        # a swapped QuantLinear keeps its bytes in buffers or in its backend's
         # repack, never in parameters(), so this sums the unswapped fp16 modules
         return packed + sum(p.numel() * p.element_size() for p in model.parameters())

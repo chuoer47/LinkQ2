@@ -6,9 +6,10 @@ build-backend = "setuptools.build_meta"
 name = "qslab"
 version = "0.1.0"
 description = "Lightweight W4A16+KV4 LLM inference engine (qserve-lab)"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 dependencies = [
-    "torch==2.5.1",
+    "torch==2.7.1",
+    "triton==3.3.1; platform_system == 'Linux'",
     "numpy<2.1",
     "safetensors",
 ]
@@ -20,4 +21,7 @@ adapters = ["transformers==4.57.6", "accelerate", "tokenizers"]
 serve = ["aiohttp>=3.9"]
 
 [tool.setuptools.packages.find]
-include = ["qslab*"]
+include = ["qslab*", "adapters*"]
+
+[tool.setuptools.package-data]
+"qslab.kernels.gemlite" = ["LICENSE", "README.md"]

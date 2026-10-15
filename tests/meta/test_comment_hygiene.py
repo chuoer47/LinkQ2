@@ -30,7 +30,9 @@ def tracked():
     out = subprocess.check_output(["git", "ls-files", "*.py"], cwd=REPO,
                                   text=True).split()
     # a tracked-but-absent path is a deletion not yet committed: no prose to read
-    return [(rel, REPO / rel) for rel in out if (REPO / rel).exists()]
+    # Vendored kernels retain their upstream source comments.
+    return [(rel, REPO / rel) for rel in out if (REPO / rel).exists()
+            and not rel.startswith("qslab/kernels/gemlite/")]
 
 
 def comments(path: Path):

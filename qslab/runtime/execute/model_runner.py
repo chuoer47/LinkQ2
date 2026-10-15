@@ -1,6 +1,3 @@
-import json
-from pathlib import Path
-
 import torch
 
 from qslab.runtime.config import Config
@@ -8,7 +5,8 @@ from qslab.runtime.state.sequence import Sequence
 from qslab.runtime.model.qwen3 import Qwen3ForCausalLM
 from qslab.runtime.execute.sampler import Sampler
 from qslab.runtime.model.context import set_context, get_context, reset_context
-from qslab.runtime.model.loader import load_model, swap_w4
+from qslab.runtime.model.loader import load_model
+from qslab.runtime.quantization import replace_quantized_linears
 
 
 class ModelRunner:
@@ -25,15 +23,10 @@ class ModelRunner:
         torch.set_default_device("cuda")
         self.model = Qwen3ForCausalLM(hf_config)
         load_model(self.model, config.model)
-        if config.w4:
-            n = swap_w4(self.model, config.w4, backend=config.w4_backend)
-            assert n > 0, f"no packed weights found under {config.w4}"
-            with (Path(config.w4) / "config.json").open() as f:
-                weight_config = json.load(f)
-            selected_backend = ("nunchaku.awq" if weight_config.get("format_id")
-                                == "nunchaku_awq_gemv_v1" else config.w4_backend)
-            print(f"[w4] swapped {n} linears from {config.w4} "
-                  f"(backend={selected_backend})")
+        if config.quantization:
+            n = replace_quantized_linears(self.model, config.quantization,
+                backend=config.quant_backend, device="cuda:0", dtype=torch.float16)
+            print(f"[quantization] replaced {n} projections ({config.quant_backend})")
         if config.compile:
             # kernel-fusion lever for the small-model draft: inductor fuses the ~1500 per-
             #   step elementwise/copy kernels; attention is dynamo-disabled so the global

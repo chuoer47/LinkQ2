@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import torch
-from transformers import AutoModelForCausalLM, AutoConfig
+from transformers import AutoModelForCausalLM
 
 
 def build_hf_causal_lm(model_path: Path | str, device: str = "cuda:0",
@@ -15,9 +15,3 @@ def build_hf_causal_lm(model_path: Path | str, device: str = "cuda:0",
     model = AutoModelForCausalLM.from_pretrained(
         str(model_path), torch_dtype=dtype, attn_implementation=attn_impl)
     return model.to(device).eval()
-
-
-def hf_config_dict(model_path: Path | str) -> dict:
-    """Raw HF config as a dict (for ModelConfig construction in L2)."""
-    cfg = AutoConfig.from_pretrained(str(model_path))
-    return cfg.to_dict()

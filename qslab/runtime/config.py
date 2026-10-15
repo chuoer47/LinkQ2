@@ -18,8 +18,8 @@ class Config:
     num_kvcache_blocks: int = -1
     v_group: int = 64              # V quant group size along head_dim
     smooth_kv: str | None = None   # SmoothAttention calibration file
-    w4: str | None = None          # qslab_w4_v1 dir; swaps in packed weights
-    w4_backend: str = "w4.auto"    # w4.v1 / w4.marlin / w4.auto
+    quantization: str | None = None          # quantization artifact directory
+    quant_backend: str = "gemlite"    # local fused W4A16 backend
     # speculative decoding: the verify forward reuses the paged decode kernel with
     #   spec_num_drafts + 1 queries per sequence
     spec_method: str | None = None        # None | "ngram" | "lookahead" | "draft"
@@ -31,8 +31,8 @@ class Config:
     spec_lookahead_span: int = 8          # "lookahead": indexed tokens per commit
     draft_model: str | None = None        # spec_method="draft": small model
     draft_gpu_memory_utilization: float = 0.95   # draft pool sizing
-    draft_w4: str | None = None          # packed W4 dir for the draft model
-    draft_w4_backend: str = "w4.v1"     # v1 GEMV is built for M=1 decode
+    draft_quantization: str | None = None          # packed W4 dir for the draft model
+    draft_quant_backend: str = "gemlite"     # fused backend for the draft model
     compile: bool = False                # torch.compile the runtime model
     compile_mode: str = "default"        # "default" | "max-autotune"
 

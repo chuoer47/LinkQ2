@@ -1,24 +1,13 @@
-# qslab runtime dependencies (pip layer).
-# torch must be the cu124 build — the W4 kernels are compiled by nvcc 12.4 and
-# PyTorch's extension ABI requires the toolkit to be >= the torch CUDA version.
-torch==2.5.1
-transformers==4.57.6      # 4.x pinned: 5.x breaks the attention-subclass patch
-accelerate==1.15.0
-safetensors==0.8.0
+torch==2.7.1
+triton==3.3.1
+transformers==4.57.6
 tokenizers==0.22.2
 numpy==2.0.2
-triton==3.1.0
-ninja==1.13.2
-
-# eval / tooling
-datasets==5.0.1
+safetensors==0.8.0
 pytest==9.1.1
-
-# service surface (optional extra: pip install -e .[serve])
-aiohttp==3.14.3
-
-# model download (China network)
-modelscope==1.40.1
-
-# NOTE: flash-attn 2.7.4 is installed from a prebuilt wheel, not PyPI —
-# see scripts/build_kernels.sh header for the exact URL and checksum.
+accelerate==1.14.0
+aiohttp==3.14.1
+datasets==3.6.0
+uv==0.13.1
+pip
+setuptools

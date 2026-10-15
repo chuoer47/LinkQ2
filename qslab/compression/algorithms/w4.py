@@ -1,4 +1,4 @@
-"""Logical W4 quantization algorithms. Backend packing lives in conversion/."""
+"""Logical W4 quantization algorithms. Kernel-specific packing belongs to the online implementation."""
 from __future__ import annotations
 
 import torch
@@ -86,14 +86,12 @@ def awq(weight: torch.Tensor, activation_absmean: torch.Tensor,
 
 
 @torch.no_grad()
-def nunchaku_awq(weight: torch.Tensor, activation_absmean: torch.Tensor,
+def awq_affine(weight: torch.Tensor, activation_absmean: torch.Tensor,
                  group_size: int = 64, n_grid: int = 20,
                  max_shrink: float = 1.0
                  ) -> tuple[QuantizedTensor, torch.Tensor]:
-    """Activation-aware affine W4 quantization for Nunchaku's AWQ GEMV."""
+    """Activation-aware affine W4 quantization."""
     out_features, in_features = weight.shape
-    if group_size != 64:
-        raise ValueError("Nunchaku AWQ GEMV requires group_size=64")
     if in_features % group_size or activation_absmean.numel() != in_features:
         raise ValueError("activation statistic shape or group_size does not match weight")
     original = weight.float()
@@ -123,6 +121,6 @@ def nunchaku_awq(weight: torch.Tensor, activation_absmean: torch.Tensor,
     result = QuantizedTensor(
         best_values.reshape_as(weight).contiguous(),
         best_scale.to(torch.float16), best_zero.to(torch.float16),
-        group_size, symmetric=False, qmin=0, qmax=15)
+        group_size, symmetric=False)
     result.validate()
     return result, best_act.to(torch.float16)

@@ -1,79 +1,44 @@
-"""Orchestrate calibration and algorithm selection for offline compression."""
-from __future__ import annotations
-
-import hashlib
+"""Offline calibration and weight quantization, independent of execution kernels."""
 from pathlib import Path
 
 import torch
 
+from adapters.model_builder import build_hf_causal_lm
 from qslab.artifacts.schema import CompressionArtifact
-from qslab.compression.algorithms import QUANTIZERS
-from qslab.compression.calibration import collect_activations
-from qslab.compression.config import CompressionConfig
-from qslab.compression.model.qwen3 import export_model_config, load_qwen3
+from .algorithms import QUANTIZERS
+from .calibration import collect_activations
+from .config import CompressionConfig
 
 
-def quantize_model(model, model_config, config: CompressionConfig,
-                   calib_ids: list[list[int]] | None = None,
-                   calibration_meta: dict | None = None) -> CompressionArtifact:
-    activations = None
-    if config.algorithm in ("awq", "nunchaku_awq"):
-        if calib_ids is None:
-            raise ValueError("AWQ requires calibration token ids")
-        activations = collect_activations(model, calib_ids, config.device)
-
-    weights = {}
-    scales = {}
-    skipped = []
+def quantize_model(model, config: CompressionConfig, calib_ids=None):
+    needs_calibration = config.algorithm in ("awq", "awq_affine")
+    if needs_calibration and calib_ids is None:
+        raise ValueError("activation-aware quantization requires calibration token IDs")
+    activations = collect_activations(model, calib_ids, config.device) if needs_calibration else {}
+    weights, scales = {}, {}
     for name, module in model.named_modules():
-        if not isinstance(module, torch.nn.Linear):
+        if not isinstance(module, torch.nn.Linear) or not name.endswith(config.target_suffixes):
             continue
-        if not name.endswith(config.target_suffixes):
-            skipped.append(name)
-            continue
-        if config.algorithm in ("awq", "nunchaku_awq"):
-            stat = activations.get(name) if activations is not None else None
-            if stat is None:
-                skipped.append(name)
-                continue
-        else:
-            stat = None
-        try:
-            quantized, input_scale = QUANTIZERS[config.algorithm](
-                module.weight.detach(), group_size=config.group_size,
-                activation_absmean=stat)
-        except KeyError as exc:
-            raise ValueError(f"unknown compression algorithm: {config.algorithm}") from exc
-        if config.artifact_device is not None:
-            destination = config.artifact_device
-            quantized.values = quantized.values.to(destination)
-            quantized.scale = quantized.scale.to(destination)
-            quantized.zero_point = quantized.zero_point.to(destination)
+        weight, input_scale = QUANTIZERS[config.algorithm](module.weight.detach(),
+            group_size=config.group_size, activation_absmean=activations.get(name))
+        if config.artifact_device:
+            weight.values = weight.values.to(config.artifact_device)
+            weight.scale = weight.scale.to(config.artifact_device)
+            weight.zero_point = weight.zero_point.to(config.artifact_device)
             if input_scale is not None:
-                input_scale = input_scale.to(destination)
+                input_scale = input_scale.to(config.artifact_device)
+        key = name + ".weight"
+        weights[key] = weight
         if input_scale is not None:
-            scales[f"{name}.weight"] = input_scale
-        weights[f"{name}.weight"] = quantized
-
-    return CompressionArtifact(
-        model=export_model_config(model_config), algorithm=config.algorithm,
-        weights=weights, transforms={"input_scale": scales} if scales else {},
-        calibration=calibration_meta or {}, skipped_layers=skipped)
+            scales[key] = input_scale
+    return CompressionArtifact(weights, {"input_scale": scales} if scales else {})
 
 
-def compress_checkpoint(model_path: str, config: CompressionConfig,
-                        calibration_path: str | None = None) -> CompressionArtifact:
-    model, model_config = load_qwen3(model_path, config.device)
-    calib_meta = {"dataset": None, "hash": None, "n_samples": 0, "seq_len": 0}
+def compress_checkpoint(model_path, config: CompressionConfig):
+    model = build_hf_causal_lm(model_path, device=config.device)
     calib_ids = None
-    source = calibration_path or config.calibration_path
-    if config.algorithm in ("awq", "nunchaku_awq"):
-        if not source or not Path(source).exists():
-            raise FileNotFoundError(f"{config.algorithm} calibration file not found: {source}")
-        path = Path(source)
-        blob = torch.load(path, map_location="cpu", weights_only=False)
-        calib_ids = blob["token_ids"]
-        calib_meta = {"dataset": blob.get("dataset"),
-                      "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-                      "n_samples": len(calib_ids), "seq_len": len(calib_ids[0])}
-    return quantize_model(model, model_config, config, calib_ids, calib_meta)
+    if config.algorithm in ("awq", "awq_affine"):
+        if not config.calibration_path:
+            raise ValueError("provide a calibration token file")
+        calib_ids = torch.load(Path(config.calibration_path), map_location="cpu", weights_only=True)["token_ids"]
+    return quantize_model(model, config, calib_ids)

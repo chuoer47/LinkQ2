@@ -7,7 +7,7 @@ from qslab.runtime.sampling_params import SamplingParams
 pytestmark = pytest.mark.e2e
 
 MODEL = "models/Qwen3-1.7B"
-W4 = "models/Qwen3-1.7B-qslab-w4-awq2"
+W4 = "artifacts/qwen3-1.7b-awq"
 CALIB = "results/smooth_kv4_qwen3-1.7b.pt"
 PROMPT = " The capital of France is"
 ORACLE = [12095, 13, 576, 6722, 315, 9856, 374, 19846, 13, 576, 6722, 315,
@@ -35,7 +35,7 @@ def _release(eng):
 def test_w4_runtime_matches_fp16_reference():
     """The whole point of the integration: the packed W4 weights drive the paged runtime and
     still reproduce the fp16 oracle."""
-    eng = _engine(w4=W4)
+    eng = _engine(quantization=W4)
     try:
         out = eng.generate([PROMPT], SamplingParams(temperature=1e-6, max_tokens=16),
                            use_tqdm=False)
@@ -50,17 +50,16 @@ def test_w4_runtime_matches_fp16_reference():
 def test_w4_swaps_every_quantized_linear():
     """Embeddings, norms and an untied lm_head stay fp16; everything the checkpoint
     quantized must be replaced."""
-    from qslab.models.w4linear import W4Linear
-    from qslab.conversion.qslab_w4 import load_qslab_w4
+    from qslab.models.quant_linear import QuantLinear
+    from qslab.runtime.quantization import QuantizedWeights
     from qslab.runtime.model.primitives import Linear as RuntimeLinear
 
-    cfg, _, _ = load_qslab_w4(W4)
-    expected = len(cfg["quantized_layers"])
+    expected = len(QuantizedWeights(W4).names)
 
-    eng = _engine(w4=W4)
+    eng = _engine(quantization=W4)
     try:
         model = eng.model_runner.model
-        n_w4 = sum(1 for m in model.modules() if isinstance(m, W4Linear))
+        n_w4 = sum(1 for m in model.modules() if isinstance(m, QuantLinear))
         n_left = sum(1 for m in model.modules() if isinstance(m, RuntimeLinear))
         assert n_w4 == expected, f"swapped {n_w4}, checkpoint has {expected}"
         # every projection is quantized, so no plain Linear should remain;
