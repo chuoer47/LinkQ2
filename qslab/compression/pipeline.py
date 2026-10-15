@@ -44,6 +44,13 @@ def quantize_model(model, model_config, config: CompressionConfig,
                 activation_absmean=stat)
         except KeyError as exc:
             raise ValueError(f"unknown compression algorithm: {config.algorithm}") from exc
+        if config.artifact_device is not None:
+            destination = config.artifact_device
+            quantized.values = quantized.values.to(destination)
+            quantized.scale = quantized.scale.to(destination)
+            quantized.zero_point = quantized.zero_point.to(destination)
+            if input_scale is not None:
+                input_scale = input_scale.to(destination)
         if input_scale is not None:
             scales[f"{name}.weight"] = input_scale
         weights[f"{name}.weight"] = quantized

@@ -61,6 +61,8 @@ def main() -> None:
     gpu_contended = bool(selected_before and (
         selected_before["memory_used_mib"] > 256
         or selected_before["utilization_percent"] > 10))
+    if device.type == "cuda":
+        torch.cuda.set_device(device)
     selected_backends = BACKENDS if args.backend == "all" else (args.backend,)
     selected_cases = CASES if args.case == "all" else tuple(
         case for case in CASES if case["name"] == args.case)

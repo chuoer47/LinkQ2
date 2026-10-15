@@ -9,7 +9,8 @@ import torch.nn.functional as F
 
 @torch.inference_mode()
 def evaluate_ppl(model: torch.nn.Module, token_ids: list[int], device: str,
-                 max_length: int, stride: int) -> dict[str, float | int]:
+                 max_length: int, stride: int,
+                 progress=None) -> dict[str, float | int]:
     stream = torch.tensor(token_ids, dtype=torch.long, device=device).unsqueeze(0)
     total_nll = 0.0
     total_tokens = 0
@@ -31,6 +32,8 @@ def evaluate_ppl(model: torch.nn.Module, token_ids: list[int], device: str,
             total_nll += float(losses.item())
             total_tokens += count
         previous_end = end
+        if progress is not None:
+            progress(end, stream.shape[1], total_tokens, total_nll)
         if end == stream.shape[1]:
             break
     if total_tokens == 0:

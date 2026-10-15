@@ -31,16 +31,24 @@ def main() -> None:
     config = BenchmarkConfig(model=args.model or BenchmarkConfig.model,
                              device=args.device)
     dtype = torch.float16 if config.dtype == "float16" else torch.bfloat16
+    print(f"[{args.algorithm}] loading model", flush=True)
     model = AutoModelForCausalLM.from_pretrained(
         str(config.model), torch_dtype=dtype, attn_implementation="eager")
     model.to(args.device).eval()
     quantized_layers = 0
     if args.algorithm != "baseline":
-        calib = torch.load(args.calibration, map_location="cpu", weights_only=False)
+        calibration_ids = None
+        if args.algorithm in ("awq", "nunchaku_awq"):
+            if args.calibration is None:
+                raise ValueError(f"{args.algorithm} requires --calibration")
+            calib = torch.load(args.calibration, map_location="cpu", weights_only=False)
+            calibration_ids = calib["token_ids"]
+        print(f"[{args.algorithm}] quantizing weights", flush=True)
         quantized_layers = apply_fake_quant(
             model, args.algorithm, config.group_size(args.algorithm),
-            calib["token_ids"], args.device)
+            calibration_ids, args.device)
     evaluation = torch.load(args.evaluation, map_location="cpu", weights_only=False)
+    print(f"[{args.algorithm}] evaluating PPL", flush=True)
     metrics = evaluate_ppl(model, evaluation["token_ids"], args.device,
                            config.max_length, config.stride)
     result = {
