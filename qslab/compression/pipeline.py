@@ -4,14 +4,16 @@ from pathlib import Path
 import torch
 
 from adapters.model_builder import build_hf_causal_lm
-from qslab.artifacts.schema import CompressionArtifact
+from qslab.quantization import QuantizationMethod
+from qslab.compression.schema import CompressionArtifact
 from .algorithms import QUANTIZERS
 from .calibration import collect_activations
 from .config import CompressionConfig
 
 
 def quantize_model(model, config: CompressionConfig, calib_ids=None):
-    quantizer = QUANTIZERS[config.algorithm]()
+    method = QuantizationMethod(config.algorithm)
+    quantizer = QUANTIZERS[method]()
     if quantizer.requires_calibration and calib_ids is None:
         raise ValueError("activation-aware quantization requires calibration token IDs")
     activations = collect_activations(model, calib_ids, config.device) if quantizer.requires_calibration else {}
@@ -32,7 +34,7 @@ def quantize_model(model, config: CompressionConfig, calib_ids=None):
         if input_scale is not None:
             scales[key] = input_scale
         print(f"quantized {key}", flush=True)
-    return CompressionArtifact(weights, {"input_scale": scales} if scales else {})
+    return CompressionArtifact(method, weights, {"input_scale": scales} if scales else {})
 
 
 def compress_checkpoint(model_path, config: CompressionConfig):

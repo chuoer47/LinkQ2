@@ -12,7 +12,7 @@ python -m benchmarks.w4a16.run --gpu 1
 ```
 
 默认需要 `models/Qwen3-8B`、`models/Qwen3-8B-W4-rtn`、`models/Qwen3-8B-W4-awq`、`datasets/w4a16/samples.json`。
-量化模型目录是完整 checkpoint，包含原有模型配置、tokenizer、全部权重分片与统一索引。
+量化模型目录是完整 checkpoint，包含原有模型配置、tokenizer、全部权重分片与统一索引。`config.json` 声明 `quant_method`，`quantized_layers.json` 明确列出量化模块；运行时按算法选择策略。
 可用 `--model` 指定浮点基线，用 `--checkpoints <目录1> <目录2>` 指定量化模型，另有 `--samples`、`--out`。
 各模式顺序使用独立子进程；Ctrl+C 会停止当前子进程。
 

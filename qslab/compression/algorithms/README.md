@@ -38,13 +38,13 @@ weight, input_scale = quantizer.quantize(
 RTN 可配置 `clip_ratio`；RTNClip 可配置 `n_grid`；AWQ 与 AWQAffine 可配置 `n_grid`、`max_shrink`。
 当前 AWQ 是项目内的激活感知缩放与量化实现。
 
-新增算法时增加一个实现文件，继承基类，再加入 `QUANTIZERS` 字典。pipeline 与 CLI 从该字典选择算法。
+新增算法时增加一个实现文件，继承基类，在 `qslab.quantization.QuantizationMethod` 定义算法名称，并加入 `QUANTIZERS` 字典。在线策略独立加入 `RUNTIME_STRATEGIES`。pipeline、CLI 和 checkpoint 使用同一个枚举，名称包含算法与 W4A16 精度。
 
-完整 checkpoint 通过 `qslab.artifacts.save_checkpoint(artifact, model_path, output)` 保存，沿用源模型权重名与分片。CLI 示例：
+完整 checkpoint 通过 `qslab.compression.save_checkpoint(artifact, model_path, output)` 保存，沿用源模型权重名与分片。CLI 示例：
 
 ```bash
 python -m qslab.compression --model models/Qwen3-8B \
-  --algorithm awq --calibration datasets/w4a16/calibration.pt \
+  --algorithm awq_w4a16 --calibration datasets/w4a16/calibration.pt \
   --out models/Qwen3-8B-W4-awq
 ```
 

@@ -3,16 +3,18 @@ from __future__ import annotations
 
 import argparse
 
-from qslab.artifacts.io import save_checkpoint
+from qslab.compression.checkpoint import save_checkpoint
 from qslab.compression.algorithms import QUANTIZERS
 from qslab.compression.config import CompressionConfig
 from qslab.compression.pipeline import compress_checkpoint
+from qslab.quantization import QuantizationMethod
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Compress a Qwen3 checkpoint")
     parser.add_argument("--model", required=True)
-    parser.add_argument("--algorithm", choices=tuple(QUANTIZERS), default="rtn")
+    parser.add_argument("--algorithm", type=QuantizationMethod, choices=tuple(QUANTIZERS),
+                        default=QuantizationMethod.RTN)
     parser.add_argument("--out", required=True, help="complete quantized checkpoint directory")
     parser.add_argument("--calibration", help="token id cache required by AWQ")
     parser.add_argument("--device", default="cuda:0")

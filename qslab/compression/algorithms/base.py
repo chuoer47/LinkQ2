@@ -3,7 +3,7 @@ from abc import ABC, abstractmethod
 
 import torch
 
-from qslab.artifacts.schema import QuantizedTensor
+from qslab.compression.schema import QuantizedTensor
 
 
 class WeightQuantizer(ABC):

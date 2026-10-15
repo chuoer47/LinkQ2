@@ -1,10 +1,12 @@
 """Configuration for an offline compression job."""
 from dataclasses import dataclass
 
+from qslab.quantization import QuantizationMethod
+
 
 @dataclass(slots=True)
 class CompressionConfig:
-    algorithm: str = "rtn"
+    algorithm: QuantizationMethod = QuantizationMethod.RTN
     group_size: int = 128
     calibration_path: str | None = None
     device: str = "cuda:0"

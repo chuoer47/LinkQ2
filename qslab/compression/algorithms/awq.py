@@ -3,7 +3,7 @@ from dataclasses import dataclass
 
 import torch
 
-from qslab.artifacts.schema import QuantizedTensor
+from qslab.compression.schema import QuantizedTensor
 from .base import WeightQuantizer
 from .rtn_clip import RTNClip
 

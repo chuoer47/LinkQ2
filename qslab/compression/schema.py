@@ -3,6 +3,8 @@ from dataclasses import dataclass, field
 
 import torch
 
+from qslab.quantization import QuantizationMethod
+
 
 @dataclass
 class QuantizedTensor:
@@ -23,6 +25,7 @@ class QuantizedTensor:
 
 @dataclass
 class CompressionArtifact:
+    algorithm: QuantizationMethod
     weights: dict[str, QuantizedTensor]
     transforms: dict[str, dict[str, torch.Tensor]] = field(default_factory=dict)
 

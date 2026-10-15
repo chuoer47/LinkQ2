@@ -16,10 +16,10 @@ python -m pip install --no-deps -e .
 
 ```bash
 CUDA_VISIBLE_DEVICES=1 python -m qslab.compression \
-  --model models/Qwen3-8B --algorithm rtn --out models/Qwen3-8B-W4-rtn
+  --model models/Qwen3-8B --algorithm rtn_w4a16 --out models/Qwen3-8B-W4-rtn
 
 CUDA_VISIBLE_DEVICES=1 python -m qslab.compression \
-  --model models/Qwen3-8B --algorithm awq \
+  --model models/Qwen3-8B --algorithm awq_w4a16 \
   --calibration datasets/w4a16/checkpoint_calibration.pt \
   --out models/Qwen3-8B-W4-awq
 ```
@@ -27,7 +27,7 @@ CUDA_VISIBLE_DEVICES=1 python -m qslab.compression \
 源 checkpoint 按其原始 dtype 加载。AWQ 校准文件包含 `token_ids`，建议使用与评测集分离的少量训练片段。
 输出目录必须尚不存在。
 
-输出沿用原模型文件、权重名称与分片归属。量化投影的原 `.weight` 张量替换为 INT8 存储的逻辑 W4 整数；scale、可选 zero_point/input_scale 存在同一分片，并登记到同一个权重索引。其余浮点权重、tokenizer、生成配置等随包保存。量化说明仅位于 `config.json` 的 `quantization_config` 中。
+输出沿用原模型文件、权重名称与分片归属。量化投影的原 `.weight` 张量替换为 INT8 存储的逻辑 W4 整数；scale、可选 zero_point/input_scale 存在同一分片，并登记到同一个权重索引。其余浮点权重、tokenizer、生成配置等随包保存。`config.json` 的 `quantization_config.quant_method` 标明算法，`quantized_layers.json` 明确列出需要替换的模块。
 
 ## 仅从新目录加载
 

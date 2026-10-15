@@ -10,10 +10,12 @@ from torch import nn
 from safetensors import safe_open
 from safetensors.torch import save_file
 
-from qslab.artifacts.io import save_checkpoint
-from qslab.artifacts.schema import CompressionArtifact
+from qslab.compression.checkpoint import save_checkpoint
+from qslab.compression.schema import CompressionArtifact
 from qslab.compression.algorithms import AWQAffine, QUANTIZERS, RTN, WeightQuantizer
 from qslab.runtime.quantization import QuantizedWeights, load_checkpoint_weights
+from qslab.quantization import QuantizationMethod as Method
+from qslab.runtime.strategies import RUNTIME_STRATEGIES, RuntimeQuantization
 
 
 def save_source(model, path):
@@ -32,7 +34,7 @@ def test_artifact_roundtrip(tmp_path, affine):
     source, output = tmp_path / 'source', tmp_path / 'checkpoint'
     model = nn.ModuleDict({'proj': nn.Linear(128, 64, bias=False)})
     save_source(model, source)
-    save_checkpoint(CompressionArtifact({'proj.weight': q}, transforms), source, output)
+    save_checkpoint(CompressionArtifact(Method.AWQ_AFFINE if affine else Method.RTN, {'proj.weight': q}, transforms), source, output)
     online = QuantizedWeights(output)
     assert online.names == ['proj.weight']
     assert torch.equal(online.layer('proj.weight')['values'], q.values)
@@ -56,6 +58,33 @@ class TinyModel(nn.Module):
 def test_quantizer_interface_is_abstract():
     with pytest.raises(TypeError):
         WeightQuantizer()
+    with pytest.raises(TypeError):
+        RuntimeQuantization()
+
+
+def test_layer_selection_and_transform_are_explicit(tmp_path):
+    """A scale tensor cannot opt a layer into quantization or input smoothing."""
+    source, output = tmp_path / 'source', tmp_path / 'checkpoint'
+    model = nn.ModuleDict({'proj': nn.Linear(128, 64, bias=False)})
+    save_source(model, source)
+    q, _ = RTN().quantize(model['proj'].weight, group_size=128)
+    save_checkpoint(CompressionArtifact(Method.RTN, {'proj.weight': q}), source, output)
+    layers = output / 'quantized_layers.json'
+    layers.write_text('[]')
+    assert QuantizedWeights(output).names == []
+    layers.write_text('["proj"]')
+    config_path = output / 'config.json'
+    config = json.loads(config_path.read_text())
+    config['quantization_config']['quant_method'] = Method.AWQ.value
+    config_path.write_text(json.dumps(config))
+    weights = QuantizedWeights(output)
+    assert isinstance(weights.strategy, RUNTIME_STRATEGIES[Method.AWQ])
+    with pytest.raises(Exception, match='input_scale'):
+        weights.layer('proj.weight')
+    config['quantization_config']['quant_method'] = 'unknown_algorithm'
+    config_path.write_text(json.dumps(config))
+    with pytest.raises(ValueError, match='unknown_algorithm'):
+        QuantizedWeights(output)
 
 
 @pytest.mark.parametrize('algorithm', QUANTIZERS)
@@ -72,12 +101,15 @@ def test_offline_pipeline(tmp_path, algorithm):
     save_checkpoint(artifact, source, output)
     loaded = QuantizedWeights(output)
     assert loaded.names == ['q_proj.weight']
+    assert loaded.config['quant_method'] == algorithm.value
+    assert artifact.algorithm == algorithm
+    assert json.loads((output / 'quantized_layers.json').read_text()) == ['q_proj']
     assert (loaded.layer('q_proj.weight')['input_scale'] is not None) == needs_calibration
-    assert loaded.config['symmetric'] == (algorithm != 'awq_affine')
+    assert loaded.config['symmetric'] == (algorithm != Method.AWQ_AFFINE)
     assert all(torch.equal(value, original[name]) for name, value in model.state_dict().items())
 
 
-@pytest.mark.parametrize('algorithm', ['awq', 'awq_affine'])
+@pytest.mark.parametrize('algorithm', [Method.AWQ, Method.AWQ_AFFINE])
 def test_pipeline_requires_calibration(algorithm):
     from qslab.compression import CompressionConfig, quantize_model
     with pytest.raises(ValueError, match='calibration'):
@@ -97,7 +129,7 @@ def test_replacement_device_move_and_release(tmp_path, affine):
     q, transform = quantizer.quantize(weight, group_size=128, activation_absmean=torch.ones(1024))
     source_path, output_path = tmp_path / 'source', tmp_path / 'checkpoint'
     save_source(model, source_path)
-    save_checkpoint(CompressionArtifact({'0.weight': q},
+    save_checkpoint(CompressionArtifact(Method.AWQ_AFFINE if affine else Method.RTN, {'0.weight': q},
         {'input_scale': {'0.weight': transform}} if transform is not None else {}), source_path, output_path)
     torch.cuda.synchronize()
     # Establish the persistent cuBLAS workspace before measuring model allocations.
@@ -144,7 +176,7 @@ def hf_source(tmp_path):
     return model, source
 
 
-@pytest.mark.parametrize('algorithm', ['rtn', 'awq', 'awq_affine'])
+@pytest.mark.parametrize('algorithm', list(Method))
 def test_complete_checkpoint_without_source(tmp_path, hf_source, algorithm):
     from adapters.model_builder import build_quantized_causal_lm
     from qslab.compression import CompressionConfig, quantize_model

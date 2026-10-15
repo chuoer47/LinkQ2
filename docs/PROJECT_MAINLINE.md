@@ -7,7 +7,7 @@
 
 ## 完整 checkpoint
 
-`qslab.artifacts.save_checkpoint(artifact, model_path, output)` 按原模型分片逐个写出完整权重包，使用 safetensors 保存张量，使用标准库复制配置和 tokenizer 等原有文件。
+`qslab.compression.save_checkpoint(artifact, model_path, output)` 按原模型分片逐个写出完整权重包，使用 safetensors 保存张量，使用标准库复制配置和 tokenizer 等原有文件。
 
 - 原始权重名称及分片映射保持一致。
 - 量化权重仍使用原始 `<模块>.weight` 名称，INT8 存储逻辑 W4 数值。
@@ -16,18 +16,37 @@
 - 未量化权重保持源 checkpoint 的数值和 dtype。
 - tokenizer、生成配置等原有文件随包保存。
 
-仅在 `config.json` 增加：
+在 `config.json` 增加算法与分组配置：
 
 ```json
-"quantization_config": {"bits": 4, "group_size": 128, "symmetric": true}
+"quantization_config": {
+  "quant_method": "awq_w4a16",
+  "bits": 4,
+  "group_size": 128,
+  "symmetric": true
+}
 ```
 
-位宽表示逻辑量化精度；紧凑 int4 布局由在线后端加载时生成。包内不绑定具体 kernel。
+另有一个 `quantized_layers.json`，内容仅为模块名称数组，例如：
+
+```json
+["model.layers.0.self_attn.q_proj", "model.layers.0.self_attn.k_proj"]
+```
+
+此数组是替换哪些层的唯一依据。位宽表示逻辑量化精度；紧凑 int4 布局由在线后端加载时生成。包内不绑定具体 kernel。
+
+算法标识只在 `qslab/quantization.py` 的 `QuantizationMethod` 枚举定义：`rtn_w4a16`、`rtn_clip_w4a16`、`awq_w4a16`、`awq_affine_w4a16`。它只含协议名称，不导入离线或在线组件。
 
 ## 在线加载
 
 `qslab/runtime/quantization.py` 独立读取完整包的配置与统一索引，不导入离线算法或离线对象。
-`load_checkpoint_weights()` 替换量化 Linear，并加载其余浮点参数。
+`load_checkpoint_weights()` 读取 `quant_method`，分发到 `RuntimeQuantization` 的具体实现，再按显式层清单替换 Linear，并加载其余浮点参数。
+
+- `RTNRuntime` / `RTNClipRuntime`：按 K 分组，`W = q × scale`。
+- `AWQRuntime`：同样还原权重，forward 显式传入 `x / input_scale`；fake 参考将该变换折叠进权重。
+- `AWQAffineRuntime`：`W = (q - zero_point) × scale`，并执行 AWQ 输入缩放。
+
+策略明确要求对应辅助张量；缺少 AWQ 的 input_scale 会报错。层选择与输入缩放均不通过字段是否存在来推断。算法策略解释产物，GemLite 后端负责布局与计算。
 
 HF 使用 `adapters.model_builder.build_quantized_causal_lm()`：通过 Transformers 从配置构造模型、通过 Accelerate 创建空参数并加载张量。只需量化模型目录；`fake=True` 用于构建配对的浮点反量化参考。
 

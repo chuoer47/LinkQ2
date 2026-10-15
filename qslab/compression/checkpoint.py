@@ -31,7 +31,10 @@ def save_checkpoint(artifact, model_path, output):
         if file.is_file() and file.suffix != '.safetensors' and file.name not in ('config.json', index_path.name):
             shutil.copy2(file, destination / file.name)
     config = json.loads((source / 'config.json').read_text())
-    config['quantization_config'] = {'bits': 4, 'group_size': group_size, 'symmetric': symmetric}
+    config['quantization_config'] = {'quant_method': artifact.algorithm.value,
+                                    'bits': 4, 'group_size': group_size, 'symmetric': symmetric}
+    layers = [name.removesuffix('.weight') for name in artifact.weights]
+    (destination / 'quantized_layers.json').write_text(json.dumps(layers, indent=2) + '\n')
     total_size = 0
     for shard in dict.fromkeys(weight_map.values()):
         tensors = {}
