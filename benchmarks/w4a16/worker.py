@@ -8,7 +8,6 @@ import torch
 
 from adapters.model_builder import build_hf_causal_lm, build_quantized_causal_lm
 from qslab.runtime.quantization import QuantizedWeights
-from qslab.kernels.gemlite.core import load_config, save_config
 from .metrics import (cleanup, decode_cycle, decode_timing, forward_timing, memory_snapshot,
                       paired_probe, probe, quality)
 
@@ -26,6 +25,7 @@ def main():
     parser.add_argument('--samples', required=True)
     parser.add_argument('--mode', choices=['fp16', 'fake', 'real'], required=True)
     parser.add_argument('--quality-only', action='store_true')
+    parser.add_argument('--backend', choices=['gemlite', 'marlin'], default='gemlite')
     parser.add_argument('--out', type=Path, required=True)
     args = parser.parse_args()
     args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -33,8 +33,10 @@ def main():
     torch.set_num_threads(4)
     device = 'cuda:0'
     cache = args.out.parent / 'autotune.json'
-    if cache.exists():
-        load_config(cache)
+    if args.backend == 'gemlite':
+        from qslab.kernels.gemlite.core import load_config, save_config
+        if cache.exists():
+            load_config(cache)
     document = json.loads(Path(args.samples).read_text())
     samples = document['samples']
     ids = samples[0]['token_ids']
@@ -49,10 +51,11 @@ def main():
     else:
         weights = QuantizedWeights(args.model)
         layers = [{'name': key.removesuffix('.weight')} for key in weights.names]
-        model = build_quantized_causal_lm(args.model, device=device, fake=args.mode == 'fake')
+        model = build_quantized_causal_lm(args.model, device=device, backend=args.backend,
+                                        fake=args.mode == 'fake')
         count = len(layers) if args.mode == 'real' else 0
     cleanup(device)
-    result = {'mode': args.mode, 'checkpoint': args.model, 'replaced_layers': count,
+    result = {'mode': args.mode, 'backend': args.backend, 'checkpoint': args.model, 'replaced_layers': count,
               'load_seconds': time.perf_counter() - start,
               'weight_storage_bytes': storage_bytes(model), 'loaded_memory': memory_snapshot(device),
               'torch': torch.__version__, 'gpu': torch.cuda.get_device_name()}
@@ -79,7 +82,7 @@ def main():
     del model
     cleanup(device)
     result['released_memory'] = memory_snapshot(device)
-    if args.mode == 'real':
+    if args.mode == 'real' and args.backend == 'gemlite':
         save_config(cache)
     args.out.write_text(json.dumps(result, indent=2))
     print(json.dumps({k: result[k] for k in ('mode', 'replaced_layers', 'weight_storage_bytes')}), flush=True)

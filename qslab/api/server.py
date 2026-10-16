@@ -263,7 +263,7 @@ def main(argv=None):
     p = argparse.ArgumentParser(prog="python -m qslab.api.server",
                                 description="OpenAI-compatible server over the qslab runtime")
     p.add_argument("--model", required=True)
-    p.add_argument("--quant-backend", choices=["gemlite"], default="gemlite")
+    p.add_argument("--quant-backend", choices=["gemlite", "marlin"], default="gemlite")
     p.add_argument("--smooth-kv", default=None)
     p.add_argument("--spec", default=None, choices=[None, "ngram", "lookahead", "draft"])
     p.add_argument("--spec-gamma", type=int, default=4)

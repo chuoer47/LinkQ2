@@ -2,7 +2,12 @@
 
 
 def make_quant_linear(backend, values, scale, **kwargs):
-    if backend != "gemlite":
+    if backend == 'gemlite':
+        from .gemlite import GemLiteLinear
+        implementation = GemLiteLinear
+    elif backend == 'marlin':
+        from .marlin import MarlinLinear
+        implementation = MarlinLinear
+    else:
         raise ValueError(f"unknown quantization backend: {backend}")
-    from .gemlite import GemLiteLinear
-    return GemLiteLinear.from_quantized(values, scale, **kwargs)
+    return implementation.from_quantized(values, scale, **kwargs)

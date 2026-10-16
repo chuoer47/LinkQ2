@@ -14,7 +14,8 @@ __pycache__/
 # results stay tracked, but big intermediate files excluded
 results/**/*.pt
 third_party/cutlass/
-third_party/marlin/
+third_party/marlin/build/
+third_party/marlin/dist/
 
 # R4: build artifacts and run logs are not source
 qslab/kernels/csrc/test_w4a16_gemm

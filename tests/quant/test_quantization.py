@@ -118,8 +118,10 @@ def test_pipeline_requires_calibration(algorithm):
 
 @pytest.mark.gpu
 @pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA required')
-@pytest.mark.parametrize('affine', [False, True])
-def test_replacement_device_move_and_release(tmp_path, affine):
+@pytest.mark.parametrize('backend,affine', [('gemlite', False), ('gemlite', True), ('marlin', False)])
+def test_replacement_device_move_and_release(tmp_path, affine, backend):
+    if backend == 'marlin':
+        pytest.importorskip('marlin')
     from qslab.models.quant_linear import QuantLinear
     torch.manual_seed(123)
     model = nn.Sequential(nn.Linear(1024, 256, bias=False)).half()
@@ -135,7 +137,7 @@ def test_replacement_device_move_and_release(tmp_path, affine):
     # Establish the persistent cuBLAS workspace before measuring model allocations.
     torch.mm(torch.ones(1, 32, device='cuda'), torch.ones(32, 32, device='cuda'))
     baseline = torch.cuda.memory_allocated()
-    assert load_checkpoint_weights(model, output_path) == 1
+    assert load_checkpoint_weights(model, output_path, backend=backend) == 1
     gc.collect()
     assert source() is None
     assert isinstance(model[0], QuantLinear)

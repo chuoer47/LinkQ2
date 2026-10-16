@@ -25,7 +25,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # weight + KV quantization
     g.add_argument("--quant-backend", default="gemlite",
-                   choices=["gemlite"])
+                   choices=["gemlite", "marlin"])
     g.add_argument("--smooth-kv", default=None,
                    help="SmoothAttention calibration for the int4 KV pool")
 

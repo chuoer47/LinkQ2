@@ -41,6 +41,7 @@ tokenizer = AutoTokenizer.from_pretrained(path, local_files_only=True)
 ```
 
 模型结构从包内配置构造，再加载包内全部权重。GemLite 后端加载时打包为 int4，forward 调用融合算子。
+Marlin 后端使用官方 `Layer.pack()` 和 `Layer.forward()`，可传入 `backend="marlin"`；编译与验证见 [Marlin benchmark](benchmarks/marlin/README.md)。
 引擎使用 `LLM(path, quant_backend="gemlite")`，自动根据包内配置选择量化加载。引擎的 FlashAttention 依赖需按 torch/CUDA 版本另行安装。
 
 ## 验证和 benchmark
