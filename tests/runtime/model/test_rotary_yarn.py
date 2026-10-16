@@ -130,16 +130,22 @@ class TestConfigOpensTheCeiling:
     """The rope math is useless if config.py's clamp still pins positions to the native
     ceiling."""
 
-    def test_native_config_still_clamps(self):
+    @pytest.fixture
+    def calibration(self, tmp_path):
+        path = tmp_path / 'calibration.pt'
+        path.touch()
+        return str(path)
+
+    def test_native_config_still_clamps(self, calibration):
         from qslab.runtime.config import Config
-        cfg = Config(MODEL, max_model_len=EXTENDED_MAX)
+        cfg = Config(MODEL, max_model_len=EXTENDED_MAX, smooth_kv=calibration)
         assert cfg.rope_scaling is None
         assert cfg.max_model_len == cfg.hf_config.max_position_embeddings
 
-    def test_yarn_config_raises_it_to_the_extended_length(self):
+    def test_yarn_config_raises_it_to_the_extended_length(self, calibration):
         from qslab.runtime.config import Config
-        native = int(Config(MODEL).hf_config.max_position_embeddings)
-        cfg = Config(MODEL, max_model_len=native * 2,
+        native = int(Config(MODEL, smooth_kv=calibration).hf_config.max_position_embeddings)
+        cfg = Config(MODEL, max_model_len=native * 2, smooth_kv=calibration,
                      rope_scaling={"rope_type": "yarn", "factor": 2.0})
         assert cfg.hf_config.max_position_embeddings == native * 2
         assert cfg.max_model_len == native * 2          # not clamped back down
@@ -147,7 +153,7 @@ class TestConfigOpensTheCeiling:
         assert cfg.rope_scaling["original_max_position_embeddings"] == native
         assert cfg.hf_config.rope_scaling == cfg.rope_scaling
 
-    def test_shrinking_is_refused(self):
+    def test_shrinking_is_refused(self, calibration):
         from qslab.runtime.config import Config
         with pytest.raises(AssertionError):
-            Config(MODEL, rope_scaling={"rope_type": "yarn", "factor": 0.5})
+            Config(MODEL, smooth_kv=calibration, rope_scaling={"rope_type": "yarn", "factor": 0.5})

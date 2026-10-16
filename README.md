@@ -53,4 +53,5 @@ python -m benchmarks.w4a16.run --gpu 1
 ```
 
 第一条验证完整包、tokenizer、独立加载、8×512 token 的 real/fake PPL 与短 decode；第二条另测 HF prefill/decode 性能。
+KV4 与 FP16 KV 的独立对照使用 `python -m benchmarks.kv4.run --gpu 1`，范围与计时口径见 [KV4 README](benchmarks/kv4/README.md)。
 详细口径见 [benchmark README](benchmarks/w4a16/README.md)，架构见 [主链路说明](docs/PROJECT_MAINLINE.md)。
