@@ -3,6 +3,8 @@
 使用 [官方 Marlin](https://github.com/IST-DASLab/marlin/tree/1f25790bdd49fba53106164a24666dade68d7c90) 的安装脚本、`Layer.pack()`、`Layer.forward()`，源码不改动。
 仓库只保留算子所需文件与官方测试，位于 `third_party/marlin`。
 
+当前状态：编译与官方基础测试通过，但实际形状数值验证失败，整模 PPL 尚未运行。见 [验证记录](RESULTS.md)。
+
 ## 编译
 
 在仓库根目录执行，所有工具和 Python 依赖放在项目 conda 环境：

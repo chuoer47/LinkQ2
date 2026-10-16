@@ -57,7 +57,7 @@ kernel 来自 GemLite 0.4.8，计算源码保持原样。M=1 使用 revsplitK GE
 
 `MarlinLinear` 接入官方 Marlin 0.1.1，算子与安装脚本位于 `third_party/marlin`。
 该后端只接受 FP16 对称 W4，使用原版 `Layer.pack()` 处理临时 fake Linear，再使用原版 `Layer.forward()`；不手写布局转换或 kernel 调用。
-AWQ input_scale 在算子外应用，原始离线包不绑定后端。构建与整模验证见 [Marlin README](../benchmarks/marlin/README.md)。
+AWQ input_scale 在算子外应用，原始离线包不绑定后端。当前编译通过，实际形状数值关卡失败，整模 PPL 未启动；见 [Marlin README](../benchmarks/marlin/README.md)。
 
 ## 验证
 
