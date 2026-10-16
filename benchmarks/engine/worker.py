@@ -39,7 +39,7 @@ def cycle(engine, ids, tokens):
             'token_ids': seq.completion_token_ids}
 
 
-def quality(engine, reference):
+def quality(engine, reference, logits_out=None):
     samples = torch.load(reference, map_location='cpu', weights_only=True)['samples']
     actual, expected, targets, free_matches = [], [], [], []
     for sample in samples:
@@ -67,6 +67,8 @@ def quality(engine, reference):
         expected.extend(sample['logits'])
         targets.extend(sample['token_ids'])
     a, b = torch.stack(actual).float(), torch.stack(expected).float()
+    if logits_out is not None:
+        torch.save(a.half(), logits_out)
     target = torch.tensor(targets)
     finite = bool(torch.isfinite(a).all())
     return {'positions': len(targets), 'finite': finite,
@@ -112,6 +114,8 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument('--model', required=True)
     p.add_argument('--kv', choices=['fp16', 'kv4'], required=True)
+    p.add_argument('--execution', choices=['eager', 'graph'], default='eager')
+    p.add_argument('--probe-logits', action='store_true')
     p.add_argument('--calibration', required=True)
     p.add_argument('--reference', type=Path, required=True)
     p.add_argument('--inputs', type=Path, required=True)
@@ -133,6 +137,11 @@ def main():
     # Initialize it before measuring the allocation baseline for close().
     warm = torch.zeros(16, 16, device='cuda', dtype=torch.float16)
     warm = warm @ warm
+    if args.execution == 'graph':
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph):
+            product = warm @ warm
+        del graph, product
     del warm
     torch.cuda.synchronize()
     torch.cuda.empty_cache()
@@ -143,18 +152,20 @@ def main():
         smooth_kv=args.calibration if args.kv == 'kv4' else None,
         max_num_seqs=1, max_model_len=args.max_model_len,
         max_num_batched_tokens=args.max_model_len, num_kvcache_blocks=4,
-        kvcache_block_size=256, enforce_eager=True, gpu_memory_utilization=0.9)
+        kvcache_block_size=256, enforce_eager=args.execution == 'eager', gpu_memory_utilization=0.9)
     engine = llm.engine
     # Timed repetitions are cold prefill, without cached-prefix work being skipped.
     engine.scheduler.block_manager.ENABLE_PREFIX_CACHE = False
-    result = {'model': args.model, 'kv': args.kv, 'gpu': torch.cuda.get_device_name(),
+    result = {'model': args.model, 'kv': args.kv, 'execution': args.execution,
+        'gpu': torch.cuda.get_device_name(),
         'torch': torch.__version__, 'load_seconds': perf_counter() - start,
         'library_baseline_allocated_bytes': before,
         'weight_bytes': llm.weight_memory_bytes(), 'kv_bytes': llm.kv_memory_bytes(),
         'resident_allocated_bytes': torch.cuda.memory_allocated(),
         'startup_peak_allocated_bytes': torch.cuda.max_memory_allocated(),
         'kv_blocks': 4, 'block_size': 256}
-    result['quality'] = quality(engine, args.reference)
+    result['quality'] = quality(engine, args.reference,
+        args.out.with_suffix('.logits.pt') if args.probe_logits else None)
     # One complete warmup for every shape, then three timed complete requests.
     for context in args.contexts:
         cycle(engine, ids[:context], args.tokens)
@@ -170,12 +181,15 @@ def main():
     result['lifecycle'] = lifecycle(engine, ids)
     result['replaced_w4_layers'] = sum(type(m).__name__ == 'GemLiteLinear'
                                       for m in engine.model_runner.model.modules())
+    result['graph_replays'] = engine.model_runner.graph_replays
+    result['graph_buckets'] = getattr(engine.model_runner, 'graph_bs', [])
     llm.close()
     llm.close()
     result['allocated_bytes_after_close'] = torch.cuda.memory_allocated()
     result['released_all_tensors'] = torch.cuda.memory_allocated() <= before + 1024 * 1024
     result['passed'] = (result['quality']['finite'] and all(result['lifecycle'].values())
-                        and result['released_all_tensors'])
+                        and result['released_all_tensors']
+                        and (args.execution != 'graph' or result['graph_replays'] > 0))
     if args.kv == 'fp16':
         result['passed'] &= (result['quality']['relative_l2'] <= 0.02
                              and result['quality']['teacher_forced_top1_agreement'] >= 0.95)
