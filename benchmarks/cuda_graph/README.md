@@ -1,5 +1,7 @@
 # FP16 KV / KV4 的 CUDA Graph 对照
 
+当前测量与严格一致性状态见 [结果记录](RESULTS.md)。现有 W4+KV4 存在重复运行的数值波动，严格 graph/eager 关卡未通过；入口会保存报告并返回非零，不能当作无损等价验收通过。
+
 ```bash
 .conda/bin/python -m benchmarks.cuda_graph.run --gpu 1
 ```
