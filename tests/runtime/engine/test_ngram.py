@@ -1,5 +1,5 @@
 """NGramProposer: pure-CPU lookup semantics."""
-from qslab.runtime.engine.ngram import NGramProposer
+from qslab.speculation.ngram import NGramProposer
 
 
 def test_repeated_pattern_proposes_followers():
@@ -47,7 +47,7 @@ def test_most_recent_occurrence_wins():
 # ---------------- LookaheadProposer (self-proposal mode) ----------------------
 
 def test_lookahead_first_occurrence_wins():
-    from qslab.runtime.engine.ngram import LookaheadProposer
+    from qslab.speculation.ngram import LookaheadProposer
     p = LookaheadProposer(3, 4)
     # same history, opposite bet from the plain lookup above: the FIRST
     # occurrence of (1,2,3) is the one this proposer caches and uses
@@ -56,7 +56,7 @@ def test_lookahead_first_occurrence_wins():
 
 
 def test_lookahead_chain_extension():
-    from qslab.runtime.engine.ngram import LookaheadProposer
+    from qslab.speculation.ngram import LookaheadProposer
     # the matched span at 0 has only three followers before the text moves on,
     # so a plain lookup stops at 3 of gamma=6; chaining keeps walking the window
     # through (7,8,9) -> (8,9,1) -> (9,1,2) and bridges the gap
@@ -66,14 +66,14 @@ def test_lookahead_chain_extension():
 
 def test_lookahead_index_is_per_sequence():
     """Batch composition must not leak into a proposal."""
-    from qslab.runtime.engine.ngram import LookaheadProposer
+    from qslab.speculation.ngram import LookaheadProposer
     p = LookaheadProposer(3, 4)
     assert p.propose([1, 2, 3, 10, 1, 2, 3], seq_id=1) == [10, 1, 2, 3]
     assert p.propose([1, 2, 3, 77, 1, 2, 3], seq_id=2) == [77, 1, 2, 3]
 
 
 def test_lookahead_drop_seqs_clears_the_index():
-    from qslab.runtime.engine.ngram import LookaheadProposer
+    from qslab.speculation.ngram import LookaheadProposer
     p = LookaheadProposer(3, 4)
     assert p.propose([1, 2, 3, 77, 1, 2, 3], seq_id=2) == [77, 1, 2, 3]
     p.drop_seqs([2])

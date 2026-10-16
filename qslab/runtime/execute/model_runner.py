@@ -1,6 +1,7 @@
 import torch
 import gc
 from accelerate import init_empty_weights
+from qslab.speculation.acceptance import rejection_sample
 
 from qslab.runtime.config import Config
 from qslab.runtime.state.sequence import Sequence
@@ -330,49 +331,6 @@ class ModelRunner:
         return torch.tensor(flat, dtype=torch.int64,
                             pin_memory=True).cuda(non_blocking=True)
 
-    @staticmethod
-    def rejection_verify(logits: torch.Tensor, temperatures: torch.Tensor,
-                         drafts: torch.Tensor, draft_probs: torch.Tensor | None,
-                         sampled: torch.Tensor) -> torch.Tensor:
-        """Leviathan probability-ratio acceptance, applied to the sampled rows."""
-        # Accept draft x with probability min(1, q(x)/p(x)); on refusal resample from
-        #   normalized max(0, q - p), which leaves the target's distribution exactly
-        #   unchanged.
-        # A rejected row can therefore never return x, so the scheduler's walk-while-row-
-        #   equals-draft prefix loop stays correct for sampled proposals as well as greedy
-        #   ones, where the rule degenerates to an argmax check.
-        # A deterministic proposal signals p = one-hot by passing draft_probs=None.
-        # Greedy rows keep their own argmax path: near temperature 0 a near-tie would land
-        #   within float error of q(x) < 1 and turn the decision into a coin flip.
-        out = sampled.clone()
-        has_draft = drafts >= 0
-        rows = has_draft & (temperatures > 1e-3)
-        if not bool(rows.any()):
-            return out
-        t = temperatures[rows].unsqueeze(1)
-        q = torch.softmax(logits[rows].float().div_(t), dim=-1)
-        x = drafts[rows]
-        one_hot = draft_probs is None
-        if one_hot:
-            p_x = torch.ones_like(x, dtype=torch.float32)
-            residual = q.clone()
-        else:
-            p = draft_probs[rows].float()
-            p_x = p.gather(1, x.unsqueeze(1)).squeeze(1)
-            residual = (q - p).clamp_min(0)
-        q_x = q.gather(1, x.unsqueeze(1)).squeeze(1)
-        accept = torch.rand(q_x.shape, device=q.device) < (q_x / p_x.clamp_min(1e-12)).clamp(max=1.0)
-        if one_hot:
-            # max(0, q - delta_x): every entry of q except x's own
-            residual.scatter_(1, x.unsqueeze(1), 0.0)
-        total = residual.sum(1, keepdim=True)
-        residual = torch.where(total > 0, residual / total.clamp_min(1e-12), q)
-        resampled = torch.multinomial(residual, 1).squeeze(1)
-        idx = rows.nonzero(as_tuple=True)[0]
-        out[idx[accept]] = x[accept]
-        out[idx[~accept]] = resampled[~accept]
-        return out
-
     def run_verify(self, seqs: list[Sequence],
                    draft_probs: torch.Tensor | None = None) -> list[int]:
         """One verify forward; returns the committed token per row (bs*M)."""
@@ -383,7 +341,7 @@ class ModelRunner:
         logits = self.run_model_verify(input_ids, positions, M)
         token_ids = self.sampler(logits, temperatures)
         drafts = self._flat_drafts(seqs, M)
-        token_ids = self.rejection_verify(logits, temperatures, drafts,
+        token_ids = rejection_sample(logits, temperatures, drafts,
                                           draft_probs, token_ids).tolist()
         reset_context()
         return token_ids

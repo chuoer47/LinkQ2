@@ -3,7 +3,7 @@ from collections import deque
 from qslab.runtime.config import Config
 from qslab.runtime.state.sequence import Sequence, SequenceStatus
 from qslab.runtime.state.block_manager import BlockManager
-from qslab.runtime.engine.ngram import NGramProposer, LookaheadProposer
+from qslab.speculation.ngram import NGramProposer, LookaheadProposer
 
 
 class Scheduler:

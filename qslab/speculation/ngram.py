@@ -30,8 +30,8 @@ class NGramProposer:
         p = int(hits[-1])                      # most recent occurrence
         return a[p + n:p + n + g].tolist()
 
-    def propose_batch(self, seqs) -> list[list[int]]:
-        return [self.propose(list(s.token_ids)) for s in seqs]
+    def propose_batch(self, histories: list[list[int]], request_ids=None) -> list[list[int]]:
+        return [self.propose(tokens) for tokens in histories]
 
 
 class LookaheadProposer(NGramProposer):
@@ -84,5 +84,5 @@ class LookaheadProposer(NGramProposer):
         self._indexed[seq_id] = len(token_ids) - n
         return index
 
-    def propose_batch(self, seqs) -> list[list[int]]:
-        return [self.propose(list(s.token_ids), s.seq_id) for s in seqs]
+    def propose_batch(self, histories: list[list[int]], request_ids) -> list[list[int]]:
+        return [self.propose(tokens, request_id) for tokens, request_id in zip(histories, request_ids)]

@@ -10,6 +10,7 @@ from qslab.runtime.state.sequence import Sequence
 from qslab.runtime.engine.scheduler import Scheduler
 from qslab.runtime.execute.model_runner import ModelRunner
 from qslab.runtime.model.context import reset_context
+from qslab.speculation.ngram import NGramProposer
 
 
 class LLMEngine:
@@ -118,7 +119,8 @@ class LLMEngine:
         proposer = self.scheduler.proposer
         if proposer is None:
             return
-        drafts = proposer.propose_batch(seqs)
+        drafts = (proposer.propose_batch([s.token_ids for s in seqs], [s.seq_id for s in seqs])
+                  if isinstance(proposer, NGramProposer) else proposer.propose_batch(seqs))
         gamma = self.scheduler.gamma
         # adaptive windows only shorten the proposal list — M stays
         # spec_num_drafts + 1 because the captured CUDA-graph family is keyed

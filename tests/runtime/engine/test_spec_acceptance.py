@@ -12,6 +12,7 @@ import torch
 
 from qslab.runtime.execute.model_runner import ModelRunner
 from qslab.runtime.engine.scheduler import Scheduler
+from qslab.speculation.acceptance import rejection_sample, accepted_prefix
 
 V = 64
 N = 20000
@@ -31,7 +32,7 @@ def _hist(tokens, vocab=V):
 
 
 def _run(logits, temps, drafts, probs, sampled):
-    return ModelRunner.rejection_verify(logits, temps, drafts, probs, sampled)
+    return rejection_sample(logits, temps, drafts, probs, sampled)
 
 
 def test_ratio_acceptance_reproduces_the_target_distribution():
@@ -93,6 +94,26 @@ def test_greedy_and_non_speculative_rows_pass_through():
     probs = torch.softmax(torch.randn(4, V), dim=-1)
     out = _run(logits, temps, drafts, probs, sampled)
     assert out[:3].tolist() == [5, 6, 7], "greedy/padded rows were modified"
+
+
+def test_small_positive_temperature_uses_the_sampling_rule():
+    torch.manual_seed(8)
+    # A temperature of 1e-4 is sampling in the ordinary runtime, not greedy.
+    logits = torch.tensor([0.0, 0.0001]).expand(N, 2).contiguous()
+    out = _run(logits, torch.full((N,), 1e-4), torch.zeros(N, dtype=torch.long),
+               None, torch.zeros(N, dtype=torch.long))
+    expected = torch.softmax(logits[0] / 1e-4, dim=0)
+    assert _tv(_hist(out, 2), expected) < 0.03
+
+
+@pytest.mark.parametrize('drafts,verified,tokens,count', [
+    ([4, 5], [4, 5, 6], [4, 5, 6], 2),
+    ([4, 5], [4, 9, 6], [4, 9], 1),
+    ([4, 5], [9, 5, 6], [9], 0),
+    ([], [9], [9], 0),
+])
+def test_acceptance_commits_only_the_contiguous_prefix(drafts, verified, tokens, count):
+    assert accepted_prefix(drafts, verified) == (tokens, count)
 
 
 @pytest.mark.gpu
