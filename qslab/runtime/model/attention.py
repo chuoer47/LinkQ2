@@ -10,7 +10,7 @@ from __future__ import annotations
 import torch
 from torch import nn
 
-from flash_attn import flash_attn_varlen_func
+from flash_attn import flash_attn_varlen_func, flash_attn_with_kvcache
 
 from qslab.runtime.model.context import get_context
 from qslab.kernels.kv4 import (materialize_kv, paged_attention_decode,
@@ -30,6 +30,7 @@ class PagedAttention(nn.Module):
         self.block_n = block_n
         self.v_group = v_group
         self.k_cache = self.v_cache = None      # (packed, scales) tuples
+        self.kv_cache_dtype = 'kv4'
         self.lam = None                         # [H_kv, D] SmoothAttention
         self.lam_q = None                       # [H_q, D] GQA-expanded
 
@@ -41,8 +42,12 @@ class PagedAttention(nn.Module):
         # The slot plan is computed ONCE per step by prepare_prefill: recomputing it per
         #   layer pays a GPU sync each.
         plan = ctx.prefix_plan
-        kp, vp = materialize_kv(self.k_cache, self.v_cache, ctx.prefix_slots,
-                                v_group=self.v_group)
+        if self.kv_cache_dtype == 'fp16':
+            kp = self.k_cache.flatten(0, 1)[ctx.prefix_slots]
+            vp = self.v_cache.flatten(0, 1)[ctx.prefix_slots]
+        else:
+            kp, vp = materialize_kv(self.k_cache, self.v_cache, ctx.prefix_slots,
+                                    v_group=self.v_group)
         k_parts, v_parts = [], []
         for slot_off, cached, q_start, q_end in plan:
             if cached > 0:
@@ -73,9 +78,28 @@ class PagedAttention(nn.Module):
             q = (q * self.lam_q.to(q.dtype))
             k = (k / self.lam.to(k.dtype))
 
+        if self.kv_cache_dtype == 'fp16':
+            if not ctx.is_prefill:
+                # Official paged API appends the current rows and applies causal
+                # attention. cache_seqlens counts rows BEFORE this forward.
+                batch = ctx.context_lens.numel()
+                rows = q.shape[0] // batch
+                return flash_attn_with_kvcache(
+                    q.reshape(batch, rows, self.num_heads, self.head_dim),
+                    k_cache, v_cache,
+                    k=k.reshape(batch, rows, self.num_kv_heads, self.head_dim),
+                    v=v.reshape(batch, rows, self.num_kv_heads, self.head_dim),
+                    cache_seqlens=ctx.context_lens - 1,
+                    block_table=ctx.block_tables, softmax_scale=self.scale,
+                    causal=True).flatten(0, 1)
+            # Prefill is eager; ordinary torch indexing writes its physical slots.
+            if k_cache is not None:
+                k_cache.flatten(0, 1).index_copy_(0, ctx.slot_mapping.long(), k)
+                v_cache.flatten(0, 1).index_copy_(0, ctx.slot_mapping.long(), v)
+
         # store FIRST (nano-vllm ordering): the decode kernel reads the
         # current token's own KV from the pool (context_lens includes it).
-        if k_cache is not None and v_cache is not None:
+        if self.kv_cache_dtype == 'kv4' and k_cache is not None and v_cache is not None:
             n_tokens = k.shape[0]
             if n_tokens > 0:
                 # v arrives as a slice of the fused qkv projection and is NOT

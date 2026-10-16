@@ -47,6 +47,21 @@ class Scheduler:
     def add(self, seq: Sequence):
         self.waiting.append(seq)
 
+    def finish(self, seq: Sequence, reason: str):
+        seq.finish_reason = reason
+        seq.status = SequenceStatus.FINISHED
+        self.block_manager.deallocate(seq)
+        if seq in self.running:
+            self.running.remove(seq)
+        if seq in self.waiting:
+            self.waiting.remove(seq)
+
+    def abort(self, seq_id: int, reason: str = 'cancelled'):
+        for seq in (*self.waiting, *self.running):
+            if seq.seq_id == seq_id:
+                self.finish(seq, reason)
+                return seq
+
     def schedule(self) -> tuple[list[Sequence], bool]:
         scheduled_seqs = []
         num_batched_tokens = 0
@@ -150,7 +165,8 @@ class Scheduler:
             proposals += k
             # a draft can hit eos or the token budget mid-list: commit up to
             # that point and finish, exactly like the one-token path would
-            budget = seq.max_tokens - seq.num_completion_tokens
+            budget = min(seq.max_tokens - seq.num_completion_tokens,
+                         self.max_model_len - len(seq))
             appended = appended[:budget]
             if not seq.ignore_eos and self.eos in appended:
                 appended = appended[:appended.index(self.eos) + 1]
@@ -174,11 +190,10 @@ class Scheduler:
             while len(seq.block_table) > seq.num_blocks:
                 self.block_manager.release_tail(seq)
             finished = (not seq.ignore_eos and appended and appended[-1] == self.eos) \
-                or seq.num_completion_tokens >= seq.max_tokens
+                or seq.num_completion_tokens >= seq.max_tokens or len(seq) >= self.max_model_len
             if finished:
-                seq.status = SequenceStatus.FINISHED
-                self.block_manager.deallocate(seq)
-                self.running.remove(seq)
+                reason = 'stop' if not seq.ignore_eos and appended and appended[-1] == self.eos else 'length'
+                self.finish(seq, reason)
         self._spec["steps"] += 1
         self._spec["proposals"] += proposals
         self._spec["accepted"] += accepted
@@ -235,7 +250,7 @@ class Scheduler:
             if is_prefill and seq.num_cached_tokens < seq.num_tokens:
                 continue
             seq.append_token(token_id)
-            if (not seq.ignore_eos and token_id == self.eos) or seq.num_completion_tokens == seq.max_tokens:
-                seq.status = SequenceStatus.FINISHED
-                self.block_manager.deallocate(seq)
-                self.running.remove(seq)
+            if not seq.ignore_eos and token_id == self.eos:
+                self.finish(seq, 'stop')
+            elif seq.num_completion_tokens >= seq.max_tokens or len(seq) >= self.max_model_len:
+                self.finish(seq, 'length')

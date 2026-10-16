@@ -6,9 +6,7 @@ from pathlib import Path
 
 from qslab.runtime.sampling_params import SamplingParams as _RuntimeParams
 
-# The runtime has no greedy branch — it always samples, and dividing the logits
-# by 1e-6 makes softmax an argmax one-hot. That is the convention every runtime
-# test and the draft proposer already use.
+# Temperatures at or below this threshold use an explicit argmax.
 GREEDY = 1e-6
 
 
@@ -20,6 +18,7 @@ class SamplingParams:
     ignore_eos: bool = False
 
     def __post_init__(self):
+        _RuntimeParams(temperature=self.temperature, max_tokens=self.max_tokens)
         if self.temperature <= 0.0:
             self.temperature = GREEDY
 
@@ -34,6 +33,7 @@ class LLM:
 
     def __init__(self, model_path: str | Path, *,
                  quant_backend: str = "gemlite",         # local fused W4A16 backend
+                 kv_cache_dtype: str = "fp16",
                  smooth_kv: str | None = None,        # SmoothAttention calibration
                  spec: str | None = None,             # ngram | lookahead | draft
                  spec_gamma: int = 4,
@@ -50,7 +50,7 @@ class LLM:
         elif draft:
             raise ValueError(f"draft model given but spec={spec!r} — use spec='draft'")
         self._engine = LLMEngine(
-            self.model_path, quant_backend=quant_backend, smooth_kv=smooth_kv,
+            self.model_path, quant_backend=quant_backend, kv_cache_dtype=kv_cache_dtype, smooth_kv=smooth_kv,
             spec_method=spec, spec_num_drafts=spec_gamma,
             spec_ngram_size=spec_ngram_size,
             spec_lookahead_span=spec_lookahead_span,
@@ -93,10 +93,22 @@ class LLM:
                 for o in out]
 
     def kv_memory_bytes(self) -> int:
-        """Resident int4 KV pool (all layers, K and V plus their scales)."""
+        """Resident KV pool, including quantization scales when present."""
         pool = getattr(self._engine.model_runner, "kv_cache", None) or []
-        return sum(t.numel() * t.element_size()
-                   for (kq, ks), (vq, vs) in pool for t in (kq, ks, vq, vs))
+        def size(item):
+            if isinstance(item, (tuple, list)):
+                return sum(size(t) for t in item)
+            return item.numel() * item.element_size()
+        return size(pool)
+
+    def close(self):
+        self._engine.exit()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self.close()
 
     def weight_memory_bytes(self) -> int:
         """Packed W4 modules plus whatever stays in fp16 (embeddings, norms)."""

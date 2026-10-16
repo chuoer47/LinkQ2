@@ -28,6 +28,7 @@ def build_parser() -> argparse.ArgumentParser:
                    choices=["gemlite", "marlin"])
     g.add_argument("--smooth-kv", default=None,
                    help="SmoothAttention calibration for the int4 KV pool")
+    g.add_argument("--kv-cache-dtype", choices=["fp16", "kv4"], default="fp16")
 
     # speculative decoding
     g.add_argument("--spec", default=None, choices=["ngram", "lookahead", "draft"],
@@ -75,7 +76,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.compile:
         runtime["compile"] = True
 
-    llm = LLM(args.model, quant_backend=args.quant_backend, smooth_kv=args.smooth_kv,
+    llm = LLM(args.model, quant_backend=args.quant_backend, kv_cache_dtype=args.kv_cache_dtype, smooth_kv=args.smooth_kv,
               spec=args.spec, spec_gamma=args.spec_gamma,
               spec_ngram_size=args.spec_ngram_size,
               spec_lookahead_span=args.spec_lookahead_span,
@@ -92,6 +93,7 @@ def main(argv: list[str] | None = None) -> int:
     if res["stats"]:
         print("stats:", json.dumps(res["stats"], ensure_ascii=False),
               file=sys.stderr)
+    llm.close()
     return 0
 
 

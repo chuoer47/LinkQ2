@@ -1,8 +1,4 @@
 """L4 service surface: an OpenAI-compatible HTTP front end over the runtime."""
-# Client disconnects are not wired to cancellation: an abandoned request keeps generating
-#   until its token budget runs out and the pump drops the deltas.
-# Cancelling mid-run needs a scheduler API that does not exist yet, so it is registered as a
-#   limit instead of being half-implemented.
 from __future__ import annotations
 
 import asyncio
@@ -14,7 +10,7 @@ import uuid
 from dataclasses import dataclass
 
 DEFAULT_MAX_TOKENS = 128
-GREEDY = 1e-6          # qslab.api.llm convention: the runtime has no greedy branch
+GREEDY = 1e-6
 
 
 @dataclass
@@ -41,8 +37,10 @@ class EnginePump:
     def __init__(self, engine):
         self.eng = engine
         self.jobs: dict[str, Job] = {}
-        self._inbox: queue.Queue[Job | None] = queue.Queue()
+        self._inbox: queue.Queue[Job | str | None] = queue.Queue()
+        self.error: str | None = None
         self._stop = threading.Event()
+        self._submit_lock = threading.Lock()
         self._thread = threading.Thread(target=self._loop, daemon=True,
                                         name="qslab-pump")
         self._thread.start()
@@ -56,12 +54,22 @@ class EnginePump:
         return q
 
     def submit(self, job: Job) -> Job:
-        self._inbox.put(job)
+        # The same lock protects shutdown and submission: no job can land
+        # behind the final error fanout and wait forever.
+        with self._submit_lock:
+            if self._stop.is_set():
+                raise RuntimeError(self.error or 'engine pump is closed')
+            self._inbox.put(job)
         return job
 
+    def cancel(self, job_id: str):
+        self._inbox.put(job_id)
+
     def close(self) -> None:
-        self._stop.set()
-        self._inbox.put(None)
+        with self._submit_lock:
+            self._stop.set()
+            self._inbox.put(None)
+        self._thread.join()
 
     # ------------------------------------------------------------------ pump thread
     def _register(self, job: Job) -> None:
@@ -81,7 +89,15 @@ class EnginePump:
                 return True
             if job is None:
                 return False
-            self._register(job)
+            if isinstance(job, str):
+                cancelled = self.jobs.pop(job, None)
+                if cancelled is not None:
+                    self.eng.abort_request(cancelled.seq.seq_id)
+            else:
+                try:
+                    self._register(job)
+                except ValueError as exc:
+                    job.publish({'error': str(exc), 'status': 400})
             blocking = False
 
     def _fanout(self) -> None:
@@ -98,24 +114,34 @@ class EnginePump:
             if job.seq.is_finished:
                 # `length` when the budget cut it off, `stop` when EOS did
                 job.publish({"delta": "", "tokens": 0,
-                             "finish": "length" if job.sent >= job.max_tokens
-                                       else "stop",
+                             "finish": job.seq.finish_reason,
                              "completion_tokens": job.sent,
                              "prompt_tokens": job.seq.num_prompt_tokens})
                 del self.jobs[job_id]
 
     def _loop(self) -> None:
-        while not self._stop.is_set():
-            if not self._drain():
-                return
-            if self.eng.is_finished():
-                # nothing running: block until the next request arrives rather
-                # than spinning (the engine owns the GPU; a busy loop would
-                # just burn a core)
-                if not self._drain(blocking=True):
+        try:
+            while not self._stop.is_set():
+                if not self._drain():
                     return
-                continue
-            self._fanout()
+                if self.eng.is_finished():
+                    if not self._drain(blocking=True):
+                        return
+                    continue
+                self._fanout()
+        except Exception as exc:
+            self.error = str(exc)
+        finally:
+            with self._submit_lock:
+                self._stop.set()
+            for job in self.jobs.values():
+                self.eng.abort_request(job.seq.seq_id, reason='error' if self.error else 'cancelled')
+                job.publish({'error': self.error or 'engine pump closed', 'status': 503})
+            self.jobs.clear()
+            while not self._inbox.empty():
+                item = self._inbox.get_nowait()
+                if isinstance(item, Job):
+                    item.publish({'error': self.error or 'engine pump closed', 'status': 503})
 
 
 # ---------------------------------------------------------------------- HTTP wire
@@ -202,45 +228,57 @@ def create_app(llm, *, model_name: str | None = None, max_tokens_cap: int = 4096
         job = Job(job_id=uuid.uuid4().hex, prompt=ids, max_tokens=max_tokens,
                   temperature=temperature)
         q = pump.attach(job)
-        pump.submit(job)
-        if not stream:
-            # both modes read the same event stream; non-streaming just
-            # collects it before answering
-            parts: list[str] = []
-            finish, n_prompt, n_completion = "stop", 0, 0
-            while True:
-                ev = await q.get()
-                parts.append(ev["delta"])
-                if ev["finish"]:
-                    finish = ev["finish"]
-                    n_completion = ev["completion_tokens"]
-                    n_prompt = ev["prompt_tokens"]
-                    break
-            return web.json_response(
-                _reply(name, "".join(parts), finish, n_prompt, n_completion))
+        try:
+            pump.submit(job)
+        except RuntimeError as exc:
+            return web.json_response({'error': {'message': str(exc)}}, status=503)
 
-        cid = "chatcmpl-" + uuid.uuid4().hex[:8]
-        resp = web.StreamResponse()
-        resp.headers["Content-Type"] = "text/event-stream"
-        resp.headers["Cache-Control"] = "no-cache"
-        await resp.prepare(request)
-        await resp.write(b"data: " + json.dumps(
-            _chunk(name, cid, "", None)).encode() + b"\n\n")
-        while True:
-            ev = await q.get()
-            if ev is None:
-                break
-            await resp.write(b"data: " + json.dumps(
-                _chunk(name, cid, ev["delta"], ev["finish"])).encode() + b"\n\n")
-            if ev["finish"]:
-                break
-        await resp.write(b"data: [DONE]\n\n")
-        await resp.write_eof()
-        return resp
+        async def next_event():
+            while True:
+                if request.transport is None or request.transport.is_closing():
+                    raise ConnectionResetError('client disconnected')
+                try:
+                    return await asyncio.wait_for(q.get(), timeout=0.25)
+                except asyncio.TimeoutError:
+                    continue
+
+        try:
+            # Await registration before opening SSE, so admission errors can
+            # still be returned as ordinary HTTP errors.
+            ev = await next_event()
+            if 'error' in ev:
+                return web.json_response({'error': {'message': ev['error']}}, status=ev['status'])
+            if not stream:
+                parts = []
+                while True:
+                    if 'error' in ev:
+                        return web.json_response({'error': {'message': ev['error']}}, status=ev['status'])
+                    parts.append(ev['delta'])
+                    if ev['finish']:
+                        return web.json_response(_reply(name, ''.join(parts), ev['finish'],
+                            ev['prompt_tokens'], ev['completion_tokens']))
+                    ev = await next_event()
+
+            cid = 'chatcmpl-' + uuid.uuid4().hex[:8]
+            resp = web.StreamResponse(headers={'Content-Type': 'text/event-stream',
+                                               'Cache-Control': 'no-cache'})
+            await resp.prepare(request)
+            while True:
+                payload = ({'error': {'message': ev['error']}} if 'error' in ev else
+                           _chunk(name, cid, ev['delta'], ev['finish']))
+                await resp.write(b'data: ' + json.dumps(payload).encode() + b'\n\n')
+                if 'error' in ev or ev['finish']:
+                    break
+                ev = await next_event()
+            await resp.write(b'data: [DONE]\n\n')
+            await resp.write_eof()
+            return resp
+        finally:
+            pump.cancel(job.job_id)
 
     async def health(request):
-        return web.json_response({"status": "ok", "model": name,
-                                  "active_requests": len(pump.jobs)})
+        return web.json_response({"status": "error" if pump.error else "ok", "model": name,
+                                  "active_requests": len(pump.jobs)}, status=503 if pump.error else 200)
 
     async def models(request):
         return web.json_response({"object": "list",
@@ -254,7 +292,9 @@ def create_app(llm, *, model_name: str | None = None, max_tokens_cap: int = 4096
     app.router.add_get("/v1/models", models)
     app.router.add_post("/v1/chat/completions", completions)
     app.router.add_post("/v1/completions", completions)
-    app.on_cleanup.append(lambda _app: pump.close())
+    async def cleanup(_app):
+        await asyncio.to_thread(pump.close)
+    app.on_cleanup.append(cleanup)
     return app
 
 
@@ -265,6 +305,7 @@ def main(argv=None):
     p.add_argument("--model", required=True)
     p.add_argument("--quant-backend", choices=["gemlite", "marlin"], default="gemlite")
     p.add_argument("--smooth-kv", default=None)
+    p.add_argument("--kv-cache-dtype", choices=['fp16', 'kv4'], default='fp16')
     p.add_argument("--spec", default=None, choices=[None, "ngram", "lookahead", "draft"])
     p.add_argument("--spec-gamma", type=int, default=4)
     p.add_argument("--draft", default=None)
@@ -289,10 +330,14 @@ def main(argv=None):
     from aiohttp import web
     from qslab.api.llm import LLM
     llm = LLM(args.model, quant_backend=args.quant_backend,
-              smooth_kv=args.smooth_kv, spec=args.spec, spec_gamma=args.spec_gamma,
+              kv_cache_dtype=args.kv_cache_dtype, smooth_kv=args.smooth_kv, spec=args.spec, spec_gamma=args.spec_gamma,
               draft=args.draft, max_num_seqs=args.max_num_seqs,
               max_model_len=args.max_model_len, gpu_memory_utilization=args.util)
-    web.run_app(create_app(llm, model_name=args.model), host=args.host, port=args.port)
+    try:
+        web.run_app(create_app(llm, model_name=args.model), host=args.host, port=args.port,
+                    handler_cancellation=True)
+    finally:
+        llm.close()
 
 
 if __name__ == "__main__":

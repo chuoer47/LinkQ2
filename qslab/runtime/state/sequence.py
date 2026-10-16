@@ -29,6 +29,7 @@ class Sequence:
         self.temperature = sampling_params.temperature
         self.max_tokens = sampling_params.max_tokens
         self.ignore_eos = sampling_params.ignore_eos
+        self.finish_reason: str | None = None
         # speculative state (set by the scheduler each verify step)
         self.spec_drafts: list[int] = []
         self.spec_verify: bool = False

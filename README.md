@@ -43,7 +43,16 @@ tokenizer = AutoTokenizer.from_pretrained(path, local_files_only=True)
 模型结构从包内配置构造，再加载包内全部权重。GemLite 后端加载时打包为 int4，forward 调用融合算子。
 Marlin 后端使用官方 `Layer.pack()` 和 `Layer.forward()`，可传入 `backend="marlin"`；当前实际形状数值验证未通过，编译与状态见 [Marlin benchmark](benchmarks/marlin/README.md)。
 引擎使用 `LLM(path, quant_backend="gemlite")`，自动根据包内配置选择量化加载。引擎的 FlashAttention 依赖需按 torch/CUDA 版本另行安装。
-自研引擎使用 KV4，必须额外传入 `smooth_kv=<校准文件>`；文件中的 lambda 和静态 K scale 须为有限正数。`v_group` 同时决定池布局和 Attention 的读写粒度。
+引擎默认使用 FP16 KV、eager 执行。传入 `kv_cache_dtype="kv4", smooth_kv=<校准文件>` 启用 KV4，与权重量化独立；文件中的 lambda 和静态 K scale 须为有限正数。`v_group` 同时决定 KV4 池布局和 Attention 的读写粒度。FP16 KV 使用官方 FlashAttention 分页接口，页面大小须为 256 的倍数，当前只支持 eager。
+
+```python
+from qslab.api import LLM, SamplingParams
+
+with LLM("models/Qwen3-8B", max_num_seqs=4) as llm:
+    result = llm.generate("The capital of France is", SamplingParams(max_tokens=16))
+```
+
+输入必须非空且短于 `max_model_len`，输出预算按剩余上下文截断；单条请求无法容纳于 KV 池时立即拒绝。请求完成、取消或执行异常后归还页面，`llm.close()` 释放模型与池；前缀缓存可保留零引用页面内容用于复用。HTTP 断连会取消请求，执行线程失败会通知等待中的客户端。
 
 ## 验证和 benchmark
 

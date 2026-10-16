@@ -1,4 +1,5 @@
 import torch
+from accelerate import init_empty_weights
 
 from qslab.runtime.config import Config
 from qslab.runtime.state.sequence import Sequence
@@ -21,13 +22,27 @@ class ModelRunner:
         default_dtype = torch.get_default_dtype()
         torch.set_default_dtype(torch.float16)  # qslab: fp16 everywhere (int4 kernel is fp16)
         torch.set_default_device("cuda")
-        self.model = Qwen3ForCausalLM(hf_config)
-        if getattr(hf_config, "quantization_config", None):
-            n = load_checkpoint_weights(self.model, config.model,
-                backend=config.quant_backend, device="cuda:0", dtype=torch.float16)
-            print(f"[quantization] loaded {n} projections ({config.quant_backend})")
-        else:
-            load_model(self.model, config.model)
+        try:
+            if getattr(hf_config, "quantization_config", None):
+                # Parameters start on meta; RoPE buffers are built on the GPU.
+                with init_empty_weights():
+                    self.model = Qwen3ForCausalLM(hf_config)
+                n = load_checkpoint_weights(self.model, config.model,
+                    backend=config.quant_backend, device="cuda:0", dtype=torch.float16)
+                print(f"[quantization] loaded {n} projections ({config.quant_backend})")
+            else:
+                self.model = Qwen3ForCausalLM(hf_config)
+                load_model(self.model, config.model)
+            for module in self.model.modules():
+                if hasattr(module, 'kv_cache_dtype'):
+                    module.kv_cache_dtype = config.kv_cache_dtype
+            self.model.eval()
+            self._initialize_execution(config)
+        finally:
+            torch.set_default_device("cpu")
+            torch.set_default_dtype(default_dtype)
+
+    def _initialize_execution(self, config):
         if config.compile:
             # kernel-fusion lever for the small-model draft: inductor fuses the ~1500 per-
             #   step elementwise/copy kernels; attention is dynamo-disabled so the global
@@ -40,13 +55,15 @@ class ModelRunner:
         self.allocate_kv_cache()
         if not self.enforce_eager:
             self.capture_cudagraph()
-        torch.set_default_device("cpu")
-        torch.set_default_dtype(default_dtype)
 
     def exit(self):
-        if not self.enforce_eager:
-            del self.graphs, self.graph_pool
+        reset_context()
+        for name in ('graphs', 'graph_pool', 'graph_vars', 'graphs_verify',
+                     'graph_vars_verify', 'kv_cache', 'model', 'sampler'):
+            if hasattr(self, name):
+                delattr(self, name)
         torch.cuda.synchronize()
+        torch.cuda.empty_cache()
 
     def call(self, method_name, *args):
         method = getattr(self, method_name, None)
@@ -65,7 +82,7 @@ class ModelRunner:
         torch.cuda.empty_cache()
 
     def allocate_kv_cache(self):
-        """Allocate the per-layer int4 paged KV pool."""
+        """Allocate the configured paged pool, accounting for its actual layout."""
         config = self.config
         hf_config = config.hf_config
         free, total = torch.cuda.mem_get_info()
@@ -78,17 +95,24 @@ class ModelRunner:
         used_by_others = (total - free) - current
         num_kv_heads = hf_config.num_key_value_heads
         head_dim = getattr(hf_config, "head_dim", hf_config.hidden_size // hf_config.num_attention_heads)
-        # per slot (= one token): H heads x (k_q D/8 u32 + k_s f16
-        #                            + v_q D/8 u32 + v_s f16) = 2*D bytes
-        slot_bytes = 2 * head_dim
+        mode = config.kv_cache_dtype
+        slot_bytes = 4 * head_dim if mode == 'fp16' else head_dim + 2 * (head_dim // config.v_group)
+        static_bytes = 0 if mode == 'fp16' else hf_config.num_hidden_layers * num_kv_heads * head_dim * 2
         block_bytes = hf_config.num_hidden_layers * self.block_size * num_kv_heads * slot_bytes
-        budget = int(total * config.gpu_memory_utilization) - used_by_others - peak
+        budget = int(total * config.gpu_memory_utilization) - used_by_others - peak - static_bytes
         print(f"[kvalloc] total={total/2**30:.2f}GiB util={config.gpu_memory_utilization} "
               f"used_by_others={used_by_others/2**30:.2f} peak={peak/2**30:.2f} "
               f"current={current/2**30:.2f} budget={budget/2**30:.2f}GiB "
               f"block_bytes={block_bytes/1024:.1f}KiB")
-        config.num_kvcache_blocks = budget // block_bytes
-        assert config.num_kvcache_blocks > 0
+        capacity = budget // block_bytes
+        if config.num_kvcache_blocks > 0:
+            if config.num_kvcache_blocks > capacity:
+                raise ValueError('requested KV pool exceeds available memory budget')
+        else:
+            max_blocks = config.max_num_seqs * ((config.max_model_len + self.block_size - 1) // self.block_size)
+            config.num_kvcache_blocks = min(capacity, max_blocks)
+        if config.num_kvcache_blocks <= 0:
+            raise ValueError('no memory available for KV blocks')
         nl, nb = hf_config.num_hidden_layers, config.num_kvcache_blocks
         total_slots = nb * self.block_size                     # one slot per token
         nw = head_dim // 8
@@ -96,6 +120,11 @@ class ModelRunner:
         ng = head_dim // vg
         self.kv_cache = []
         for _ in range(nl):
+            if mode == 'fp16':
+                shape = (nb, self.block_size, num_kv_heads, head_dim)
+                self.kv_cache.append((torch.zeros(shape, dtype=torch.float16, device='cuda'),
+                                      torch.zeros(shape, dtype=torch.float16, device='cuda')))
+                continue
             # K: int4 + a STATIC per-channel scale table shared by all slots
             kq = torch.zeros(total_slots, num_kv_heads, nw,
                              dtype=torch.uint32, device="cuda")
@@ -113,8 +142,10 @@ class ModelRunner:
                 module.k_cache = self.kv_cache[layer_id][0]
                 module.v_cache = self.kv_cache[layer_id][1]
                 module.v_group = vg
+                module.kv_cache_dtype = mode
                 layer_id += 1
-        self.load_smoothing(config.smooth_kv)
+        if config.smooth_kv:
+            self.load_smoothing(config.smooth_kv)
 
     def load_smoothing(self, path: str | None):
         """Fold the calibrated SmoothAttention factors into the pool."""
@@ -131,7 +162,8 @@ class ModelRunner:
         for module in self.model.modules():
             if hasattr(module, "k_cache") and hasattr(module, "v_cache"):
                 module.set_smooth_lambda(lam[layer_id].cuda())
-                module.k_cache[1].copy_(kscale[layer_id].half())
+                if module.kv_cache_dtype == 'kv4':
+                    module.k_cache[1].copy_(kscale[layer_id].half())
                 layer_id += 1
         print(f"[smooth_kv] loaded {path}: lambda/kscale for {layer_id} layers")
 

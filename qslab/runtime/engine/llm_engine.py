@@ -1,4 +1,5 @@
 import atexit
+from dataclasses import replace
 from time import perf_counter
 from tqdm.auto import tqdm
 from transformers import AutoTokenizer
@@ -8,6 +9,7 @@ from qslab.runtime.sampling_params import SamplingParams
 from qslab.runtime.state.sequence import Sequence
 from qslab.runtime.engine.scheduler import Scheduler
 from qslab.runtime.execute.model_runner import ModelRunner
+from qslab.runtime.model.context import reset_context
 
 
 class LLMEngine:
@@ -39,24 +41,55 @@ class LLMEngine:
     def exit(self):
         # idempotent: atexit fires this after a test may already have released
         # the runner to free the card for the next module
-        proposer = getattr(self.scheduler, "proposer", None) if hasattr(self, "scheduler") else None
-        if proposer is not None and hasattr(proposer, "exit"):
-            proposer.exit()
         runner = getattr(self, "model_runner", None)
         if runner is None:
             return
+        if hasattr(self, 'scheduler'):
+            self.abort_all()
+        proposer = getattr(self.scheduler, "proposer", None) if hasattr(self, "scheduler") else None
+        if proposer is not None and hasattr(proposer, "exit"):
+            proposer.exit()
         runner.call("exit")
         del self.model_runner
+        atexit.unregister(self.exit)
+
+    def abort_request(self, seq_id: int, reason: str = 'cancelled'):
+        seq = self.scheduler.abort(seq_id, reason)
+        proposer = self.scheduler.proposer
+        if seq is not None and hasattr(proposer, 'drop_seqs'):
+            proposer.drop_seqs([seq_id])
+
+    def abort_all(self, reason: str = 'cancelled'):
+        for seq in (*self.scheduler.waiting, *self.scheduler.running):
+            self.abort_request(seq.seq_id, reason)
 
     def add_request(self, prompt: str | list[int], sampling_params: SamplingParams) -> Sequence:
         """Queue one request and hand back its Sequence."""
         if isinstance(prompt, str):
             prompt = self.tokenizer.encode(prompt)
+        if not prompt or len(prompt) >= self.scheduler.max_model_len:
+            raise ValueError('prompt must be nonempty and shorter than max_model_len')
+        budget = min(sampling_params.max_tokens, self.scheduler.max_model_len - len(prompt))
+        max_blocks = len(self.scheduler.block_manager.blocks)
+        required = (len(prompt) + budget - 2) // self.scheduler.block_size + 1
+        if required > max_blocks:
+            raise ValueError('request cannot fit in the KV pool; reduce context or enlarge the pool')
+        sampling_params = replace(sampling_params, max_tokens=budget)
         seq = Sequence(prompt, sampling_params)
         self.scheduler.add(seq)
         return seq
 
     def step(self):
+        if self.is_finished():
+            return [], 0
+        try:
+            return self._step()
+        except Exception:
+            self.abort_all('error')
+            reset_context()
+            raise
+
+    def _step(self):
         seqs, is_prefill = self.scheduler.schedule()
         if is_prefill:
             num_tokens = sum(seq.num_scheduled_tokens for seq in seqs)
@@ -109,8 +142,17 @@ class LLMEngine:
         pbar = tqdm(total=len(prompts), desc="Generating", dynamic_ncols=True, disable=not use_tqdm)
         if not isinstance(sampling_params, list):
             sampling_params = [sampling_params] * len(prompts)
-        for prompt, sp in zip(prompts, sampling_params):
-            self.add_request(prompt, sp)
+        if len(sampling_params) != len(prompts):
+            raise ValueError('one sampling_params entry is required per prompt')
+        queued = []
+        try:
+            for prompt, sp in zip(prompts, sampling_params):
+                queued.append(self.add_request(prompt, sp))
+        except Exception:
+            for seq in queued:
+                self.abort_request(seq.seq_id)
+            pbar.close()
+            raise
         outputs = {}
         prefill_throughput = decode_throughput = 0.
         while not self.is_finished():

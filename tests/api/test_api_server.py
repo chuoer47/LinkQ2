@@ -23,9 +23,12 @@ class FakeSeq:
         self.completion_token_ids: list[int] = []
         self.max_tokens = max_tokens
         self.is_finished = False
+        self.seq_id = id(self)
+        self.finish_reason = None
 
     def finish(self):
         self.is_finished = True
+        self.finish_reason = 'length' if len(self.completion_token_ids) >= self.max_tokens else 'stop'
 
 
 class FakeTokenizer:
@@ -55,6 +58,12 @@ class FakeEngine:
 
     def is_finished(self):
         return all(s.is_finished for s in self.seqs)
+
+    def abort_request(self, seq_id, reason='cancelled'):
+        for seq in self.seqs:
+            if seq.seq_id == seq_id:
+                seq.finish()
+                seq.finish_reason = reason
 
     def step(self):
         self.max_inflight = max(self.max_inflight,
@@ -216,6 +225,58 @@ def test_pump_accepts_a_second_request_mid_step():
         assert eng.is_finished(), "the second request never drained"
         assert len(eng.seqs) == 2
         assert eng.max_inflight >= 2, "the two requests never shared a step"
+    finally:
+        eng.release.set()
+        pump.close()
+
+
+def test_pump_cancels_a_running_request_and_keeps_serving():
+    from qslab.api.server import EnginePump, Job
+    eng = GateEngine()
+    pump = EnginePump(eng)
+    try:
+        pump.submit(Job(job_id='cancel', prompt=[1], max_tokens=100))
+        assert eng.entered.wait(5)
+        pump.cancel('cancel')
+        pump.submit(Job(job_id='next', prompt=[2], max_tokens=2))
+        eng.release.set()
+        deadline = time.monotonic() + 5
+        while (len(eng.seqs) < 2 or not eng.is_finished()) and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert eng.seqs[0].finish_reason == 'cancelled'
+        assert eng.seqs[1].finish_reason == 'length'
+    finally:
+        eng.release.set()
+        pump.close()
+
+
+def test_pump_failure_notifies_active_and_queued_jobs():
+    from qslab.api.server import EnginePump, Job
+
+    class FailingEngine(GateEngine):
+        def step(self):
+            self.entered.set()
+            self.release.wait(5)
+            raise RuntimeError('execution failed')
+
+    eng = FailingEngine()
+    pump = EnginePump(eng)
+    events = []
+    try:
+        first, second = Job('first', [1]), Job('second', [2])
+        first.publish = events.append
+        second.publish = events.append
+        pump.submit(first)
+        assert eng.entered.wait(5)
+        pump.submit(second)
+        eng.release.set()
+        deadline = time.monotonic() + 5
+        while len(events) < 2 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert len(events) == 2 and all(e['status'] == 503 for e in events)
+        assert eng.is_finished()
+        with pytest.raises(RuntimeError, match='execution failed'):
+            pump.submit(Job('late', [3]))
     finally:
         eng.release.set()
         pump.close()

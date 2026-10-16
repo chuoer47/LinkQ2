@@ -3,6 +3,7 @@ import paths and single-GPU simplifications."""
 from __future__ import annotations
 
 import math
+from weakref import WeakValueDictionary
 
 import torch
 from torch import nn
@@ -106,12 +107,12 @@ class RotaryEmbedding(nn.Module):
 #: one instance per distinct rope setup — all 36 decoder layers share it, as
 #: the previous lru_cache(1) guaranteed. A dict is unhashable, so the key is the
 #: sorted items.
-_CACHE: dict[tuple, RotaryEmbedding] = {}
+_CACHE: WeakValueDictionary = WeakValueDictionary()
 
 
 def get_rope(head_size: int, rotary_dim: int, max_position: int, base: float,
              scaling: dict | None = None):
-    key = (head_size, rotary_dim, max_position, base,
+    key = (str(torch.get_default_device()), head_size, rotary_dim, max_position, base,
            tuple(sorted((scaling or {}).items())))
     rope = _CACHE.get(key)
     if rope is None:

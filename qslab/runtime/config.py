@@ -12,11 +12,12 @@ class Config:
     max_model_len: int = 4096
     rope_scaling: dict | None = None  # {"rope_type": "yarn", "factor": 3.2} → 128K
     gpu_memory_utilization: float = 0.9
-    enforce_eager: bool = False
+    enforce_eager: bool = True
     hf_config: AutoConfig | None = None
     eos: int = -1
-    kvcache_block_size: int = 128
+    kvcache_block_size: int = 256
     num_kvcache_blocks: int = -1
+    kv_cache_dtype: str = "fp16"    # fp16 | kv4; independent of weight quantization
     v_group: int = 64              # V quant group size along head_dim
     smooth_kv: str | None = None   # SmoothAttention calibration file
     quant_backend: str = "gemlite"    # local fused W4A16 backend
@@ -37,11 +38,21 @@ class Config:
 
     def __post_init__(self):
         assert os.path.isdir(self.model)
-        if not self.smooth_kv:
+        if self.kv_cache_dtype not in {"fp16", "kv4"}:
+            raise ValueError('kv_cache_dtype must be fp16 or kv4')
+        if self.kv_cache_dtype == 'fp16' and not self.enforce_eager:
+            raise ValueError('FP16 KV currently requires enforce_eager=True')
+        if self.kv_cache_dtype == 'kv4' and not self.smooth_kv:
             raise ValueError('KV4 requires smooth_kv calibration with positive static K scales')
-        if not Path(self.smooth_kv).is_file():
+        if self.smooth_kv and not Path(self.smooth_kv).is_file():
             raise FileNotFoundError(self.smooth_kv)
-        assert self.kvcache_block_size % 128 == 0  # qslab: KV4 block alignment
+        alignment = 256 if self.kv_cache_dtype == 'fp16' else 128
+        if self.kvcache_block_size <= 0 or self.kvcache_block_size % alignment:
+            raise ValueError(f'kvcache_block_size must be a positive multiple of {alignment}')
+        if min(self.max_model_len, self.max_num_seqs, self.max_num_batched_tokens) <= 0:
+            raise ValueError('context and batch limits must be positive')
+        if not 0 < self.gpu_memory_utilization <= 1:
+            raise ValueError('gpu_memory_utilization must be in (0, 1]')
         self.hf_config = AutoConfig.from_pretrained(self.model)
         head_dim = getattr(self.hf_config, 'head_dim',
                            self.hf_config.hidden_size // self.hf_config.num_attention_heads)
