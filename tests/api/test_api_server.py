@@ -181,6 +181,14 @@ def test_validation_rejects_bad_bodies(base_url):
         assert e.value.code == 400, bad
 
 
+def test_last_context_position_is_available(base_url):
+    status, result = _post(base_url, '/v1/completions', {'prompt': 'x' * 63, 'max_tokens': 1})
+    assert status == 200 and result['usage']['completion_tokens'] == 1
+    with pytest.raises(HTTPError) as exc:
+        _post(base_url, '/v1/completions', {'prompt': 'x' * 64, 'max_tokens': 1})
+    assert exc.value.code == 400
+
+
 def test_two_clients_both_complete(base_url):
     import concurrent.futures
     with concurrent.futures.ThreadPoolExecutor(2) as ex:

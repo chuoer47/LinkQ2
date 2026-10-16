@@ -211,7 +211,7 @@ def create_app(llm, *, model_name: str | None = None, max_tokens_cap: int = 4096
             return "needs either 'messages' or 'prompt'"
         if not ids:
             return "empty prompt"
-        if ceiling and len(ids) + 1 >= ceiling:
+        if ceiling and len(ids) >= ceiling:
             return f"prompt of {len(ids)} tokens leaves no room under max_model_len={ceiling}"
         return ids, max_tokens, temperature, stream
 

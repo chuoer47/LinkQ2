@@ -1,4 +1,5 @@
 import torch
+import gc
 from accelerate import init_empty_weights
 
 from qslab.runtime.config import Config
@@ -63,6 +64,9 @@ class ModelRunner:
             if hasattr(self, name):
                 delattr(self, name)
         torch.cuda.synchronize()
+        # Parameters carry bound weight_loader methods, so dropping the model
+        # alone leaves Python reference cycles until the next GC collection.
+        gc.collect()
         torch.cuda.empty_cache()
 
     def call(self, method_name, *args):

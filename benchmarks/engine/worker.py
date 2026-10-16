@@ -1,6 +1,5 @@
 """Measure the real LLMEngine, including admission, scheduling and sampling."""
 import argparse
-import gc
 import json
 from pathlib import Path
 from statistics import median
@@ -173,8 +172,6 @@ def main():
                                       for m in engine.model_runner.model.modules())
     llm.close()
     llm.close()
-    gc.collect()
-    torch.cuda.empty_cache()
     result['allocated_bytes_after_close'] = torch.cuda.memory_allocated()
     result['released_all_tensors'] = torch.cuda.memory_allocated() <= before + 1024 * 1024
     result['passed'] = (result['quality']['finite'] and all(result['lifecycle'].values())

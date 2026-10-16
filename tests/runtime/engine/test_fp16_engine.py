@@ -18,17 +18,18 @@ def test_fp16_prefill_decode_and_page_reuse_match_hf(tmp_path):
         head_dim=64, max_position_embeddings=64, tie_word_embeddings=False)
     hf = Qwen3ForCausalLM(cfg).half().eval().cuda()
     hf.save_pretrained(tmp_path)
+    prompt = [3, 8, 9, 4, 6, 2, 7]
+    with torch.inference_mode():
+        reference = hf.generate(torch.tensor([prompt], device='cuda'),
+            max_new_tokens=8, do_sample=False, eos_token_id=None,
+            pad_token_id=0)[0, len(prompt):].tolist()
+    baseline = torch.cuda.memory_allocated()
     config = Config(str(tmp_path), max_model_len=32, max_num_seqs=2,
                     max_num_batched_tokens=4, num_kvcache_blocks=2)
     Sequence.block_size = config.kvcache_block_size
     runner = ModelRunner(config)
     scheduler = Scheduler(config)
-    prompt = [3, 8, 9, 4, 6, 2, 7]
     try:
-        with torch.inference_mode():
-            reference = hf.generate(torch.tensor([prompt], device='cuda'),
-                max_new_tokens=8, do_sample=False, eos_token_id=None,
-                pad_token_id=0)[0, len(prompt):].tolist()
         # Run twice against the same pool; each prompt is chunked into 4+3 rows.
         for _ in range(2):
             seq = Sequence(prompt, SamplingParams(max_tokens=8, temperature=0, ignore_eos=True))
@@ -40,3 +41,4 @@ def test_fp16_prefill_decode_and_page_reuse_match_hf(tmp_path):
             assert not scheduler.block_manager.used_block_ids
     finally:
         runner.exit()
+    assert torch.cuda.memory_allocated() <= baseline + 64 * 1024
