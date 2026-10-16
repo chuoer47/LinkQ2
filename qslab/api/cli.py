@@ -45,7 +45,9 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--max-model-len", type=int, default=4096)
     g.add_argument("--max-num-seqs", type=int, default=None)
     g.add_argument("--gpu-memory-utilization", type=float, default=None)
-    g.add_argument("--enforce-eager", action="store_true", help="skip CUDA graphs")
+    execution = g.add_mutually_exclusive_group()
+    execution.add_argument("--enforce-eager", action="store_true", help="skip CUDA graphs")
+    execution.add_argument("--cuda-graph", action="store_true", help="capture and replay decode")
     g.add_argument("--compile", action="store_true", help="torch.compile the model")
     g.add_argument("--stats-only", action="store_true",
                    help="print the stats json instead of the generated text")
@@ -71,8 +73,7 @@ def main(argv: list[str] | None = None) -> int:
         v = getattr(args, flag)
         if v is not None:
             runtime[key] = v
-    if args.enforce_eager:
-        runtime["enforce_eager"] = True
+    runtime["enforce_eager"] = not args.cuda_graph
     if args.compile:
         runtime["compile"] = True
 

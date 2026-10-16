@@ -40,8 +40,6 @@ class Config:
         assert os.path.isdir(self.model)
         if self.kv_cache_dtype not in {"fp16", "kv4"}:
             raise ValueError('kv_cache_dtype must be fp16 or kv4')
-        if self.kv_cache_dtype == 'fp16' and not self.enforce_eager:
-            raise ValueError('FP16 KV currently requires enforce_eager=True')
         if self.kv_cache_dtype == 'kv4' and not self.smooth_kv:
             raise ValueError('KV4 requires smooth_kv calibration with positive static K scales')
         if self.smooth_kv and not Path(self.smooth_kv).is_file():

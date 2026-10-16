@@ -34,7 +34,7 @@
 
 关闭后的显存与预先初始化的 cuBLAS 工作区基线比较，允许 1 MiB 测量余量。当前环境 cuBLAS 保留 8.125 MiB；已通过独立检查确认模型关闭后无存活 CUDA Tensor，清理 cuBLAS 工作区后 allocated 归零。正式推理不主动清理进程共享的库工作区。
 
-默认规模很小；本轮不验证多请求公平性、抢占压力、CUDA graph 或投机加速。FP16 KV 目前只支持 eager，分页读写使用官方 FlashAttention 接口，未修改第三方算子的计算实现。
+默认规模很小；该入口测量 eager，不验证多请求公平性、抢占压力、CUDA graph 或投机加速。引擎的 FP16 KV 和 KV4 均可启用 CUDA Graph；本目录保持 eager 基线的测量口径。
 
 ## 结果与复现
 

@@ -43,7 +43,7 @@ tokenizer = AutoTokenizer.from_pretrained(path, local_files_only=True)
 模型结构从包内配置构造，再加载包内全部权重。GemLite 后端加载时打包为 int4，forward 调用融合算子。
 Marlin 后端使用官方 `Layer.pack()` 和 `Layer.forward()`，可传入 `backend="marlin"`；当前实际形状数值验证未通过，编译与状态见 [Marlin benchmark](benchmarks/marlin/README.md)。
 引擎使用 `LLM(path, quant_backend="gemlite")`，自动根据包内配置选择量化加载。引擎的 FlashAttention 依赖需按 torch/CUDA 版本另行安装。
-引擎默认使用 FP16 KV、eager 执行。传入 `kv_cache_dtype="kv4", smooth_kv=<校准文件>` 启用 KV4，与权重量化独立；文件中的 lambda 和静态 K scale 须为有限正数。`v_group` 同时决定 KV4 池布局和 Attention 的读写粒度。FP16 KV 使用官方 FlashAttention 分页接口，页面大小须为 256 的倍数，当前只支持 eager。
+引擎默认使用 FP16 KV、eager 执行。传入 `kv_cache_dtype="kv4", smooth_kv=<校准文件>` 启用 KV4，与权重量化独立；文件中的 lambda 和静态 K scale 须为有限正数。`v_group` 同时决定 KV4 池布局和 Attention 的读写粒度。FP16 KV 使用 nano-vLLM 的存储算子与官方 FlashAttention 分页接口，页面大小须为 256 的倍数；传入 `enforce_eager=False` 或 CLI 的 `--cuda-graph` 开启 decode CUDA Graph。
 
 ```python
 from qslab.api import LLM, SamplingParams

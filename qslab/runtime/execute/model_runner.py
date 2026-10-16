@@ -18,6 +18,7 @@ class ModelRunner:
         hf_config = config.hf_config
         self.block_size = config.kvcache_block_size
         self.enforce_eager = config.enforce_eager
+        self.graph_replays = 0
 
         torch.cuda.set_device(0)
         default_dtype = torch.get_default_dtype()
@@ -296,7 +297,7 @@ class ModelRunner:
     @torch.inference_mode()
     def run_model_verify(self, input_ids: torch.Tensor, positions: torch.Tensor, M: int):
         """All M rows produce logits — acceptance needs every position."""
-        if self.enforce_eager or input_ids.size(0) > 512:
+        if self.enforce_eager or input_ids.size(0) // M > max(self.graph_bs):
             hidden = self.model(input_ids, positions)
             return self.model.compute_logits(hidden)
         bs = input_ids.size(0) // M
@@ -310,8 +311,10 @@ class ModelRunner:
         graph_vars["slot_mapping"][:n] = context.slot_mapping
         graph_vars["context_lens"].zero_()
         graph_vars["context_lens"][:bs] = context.context_lens
+        graph_vars["block_tables"].zero_()
         graph_vars["block_tables"][:bs, :context.block_tables.size(1)] = context.block_tables
         graph.replay()
+        self.graph_replays += 1
         return self.model.compute_logits(graph_vars["outputs"][:n])
 
     @staticmethod
@@ -390,7 +393,7 @@ class ModelRunner:
 
     @torch.inference_mode()
     def run_model(self, input_ids: torch.Tensor, positions: torch.Tensor, is_prefill: bool):
-        if is_prefill or self.enforce_eager or input_ids.size(0) > 512:
+        if is_prefill or self.enforce_eager or input_ids.size(0) > max(self.graph_bs):
             hidden = self.model(input_ids, positions)
             if is_prefill:
                 # only the last token of each scheduled sequence produces logits
@@ -412,8 +415,10 @@ class ModelRunner:
             graph_vars["slot_mapping"][:bs] = context.slot_mapping
             graph_vars["context_lens"].zero_()
             graph_vars["context_lens"][:bs] = context.context_lens
+            graph_vars["block_tables"].zero_()
             graph_vars["block_tables"][:bs, :context.block_tables.size(1)] = context.block_tables
             graph.replay()
+            self.graph_replays += 1
             return self.model.compute_logits(graph_vars["outputs"][:bs])
 
     def run(self, seqs: list[Sequence], is_prefill: bool) -> list[int]:
@@ -432,11 +437,12 @@ class ModelRunner:
         max_num_blocks = (config.max_model_len + self.block_size - 1) // self.block_size
         input_ids = torch.zeros(max_bs, dtype=torch.int64)
         positions = torch.zeros(max_bs, dtype=torch.int64)
-        slot_mapping = torch.zeros(max_bs, dtype=torch.int32)
+        slot_mapping = torch.full((max_bs,), -1, dtype=torch.int32)
         context_lens = torch.zeros(max_bs, dtype=torch.int32)
         block_tables = torch.zeros(max_bs, max_num_blocks, dtype=torch.int32)
         outputs = torch.zeros(max_bs, hf_config.hidden_size)
-        self.graph_bs = [1, 2, 4, 8] + list(range(16, max_bs + 1, 16))
+        self.graph_bs = sorted({bs for bs in [1, 2, 4, 8] + list(range(16, max_bs + 1, 16))
+                                if bs <= max_bs} | {max_bs})
         self.graphs = {}
         self.graph_pool = None
 
@@ -468,7 +474,7 @@ class ModelRunner:
             M = config.spec_num_drafts + 1
             v_input_ids = torch.zeros(max_bs * M, dtype=torch.int64)
             v_positions = torch.zeros(max_bs * M, dtype=torch.int64)
-            v_slot_mapping = torch.zeros(max_bs * M, dtype=torch.int32)
+            v_slot_mapping = torch.full((max_bs * M,), -1, dtype=torch.int32)
             v_context_lens = torch.zeros(max_bs, dtype=torch.int32)
             v_block_tables = torch.zeros(max_bs, max_num_blocks, dtype=torch.int32)
             v_outputs = torch.zeros(max_bs * M, hf_config.hidden_size)

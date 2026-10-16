@@ -13,6 +13,7 @@ from torch import nn
 from flash_attn import flash_attn_varlen_func, flash_attn_with_kvcache
 
 from qslab.runtime.model.context import get_context
+from qslab.kernels.fp16_kv import store_kvcache
 from qslab.kernels.kv4 import (materialize_kv, paged_attention_decode,
                                store_kv_quant)
 
@@ -79,23 +80,25 @@ class PagedAttention(nn.Module):
             k = (k / self.lam.to(k.dtype))
 
         if self.kv_cache_dtype == 'fp16':
-            if not ctx.is_prefill:
-                # Official paged API appends the current rows and applies causal
-                # attention. cache_seqlens counts rows BEFORE this forward.
-                batch = ctx.context_lens.numel()
-                rows = q.shape[0] // batch
-                return flash_attn_with_kvcache(
-                    q.reshape(batch, rows, self.num_heads, self.head_dim),
-                    k_cache, v_cache,
-                    k=k.reshape(batch, rows, self.num_kv_heads, self.head_dim),
-                    v=v.reshape(batch, rows, self.num_kv_heads, self.head_dim),
-                    cache_seqlens=ctx.context_lens - 1,
-                    block_table=ctx.block_tables, softmax_scale=self.scale,
-                    causal=True).flatten(0, 1)
-            # Prefill is eager; ordinary torch indexing writes its physical slots.
             if k_cache is not None:
-                k_cache.flatten(0, 1).index_copy_(0, ctx.slot_mapping.long(), k)
-                v_cache.flatten(0, 1).index_copy_(0, ctx.slot_mapping.long(), v)
+                store_kvcache(k, v, k_cache, v_cache, ctx.slot_mapping)
+            if ctx.is_prefill:
+                # Upstream paged varlen path reads chunk/prefix KV directly.
+                if ctx.block_tables is not None:
+                    k, v = k_cache, v_cache
+                return flash_attn_varlen_func(q, k, v,
+                    cu_seqlens_q=ctx.cu_seqlens_q, cu_seqlens_k=ctx.cu_seqlens_k,
+                    max_seqlen_q=ctx.max_seqlen_q, max_seqlen_k=ctx.max_seqlen_k,
+                    softmax_scale=self.scale, causal=True, block_table=ctx.block_tables)
+            batch = ctx.context_lens.numel()
+            rows = q.shape[0] // batch
+            # KV was stored above. No append in FlashAttention, so graph-padding
+            # rows with slot=-1 cannot overwrite any live sequence's cache.
+            return flash_attn_with_kvcache(
+                q.reshape(batch, rows, self.num_heads, self.head_dim),
+                k_cache, v_cache, cache_seqlens=ctx.context_lens + rows - 1,
+                block_table=ctx.block_tables, softmax_scale=self.scale,
+                causal=True).flatten(0, 1)
 
         # store FIRST (nano-vllm ordering): the decode kernel reads the
         # current token's own KV from the pool (context_lens includes it).

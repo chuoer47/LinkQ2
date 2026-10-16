@@ -306,6 +306,7 @@ def main(argv=None):
     p.add_argument("--quant-backend", choices=["gemlite", "marlin"], default="gemlite")
     p.add_argument("--smooth-kv", default=None)
     p.add_argument("--kv-cache-dtype", choices=['fp16', 'kv4'], default='fp16')
+    p.add_argument("--cuda-graph", action='store_true')
     p.add_argument("--spec", default=None, choices=[None, "ngram", "lookahead", "draft"])
     p.add_argument("--spec-gamma", type=int, default=4)
     p.add_argument("--draft", default=None)
@@ -332,6 +333,7 @@ def main(argv=None):
     llm = LLM(args.model, quant_backend=args.quant_backend,
               kv_cache_dtype=args.kv_cache_dtype, smooth_kv=args.smooth_kv, spec=args.spec, spec_gamma=args.spec_gamma,
               draft=args.draft, max_num_seqs=args.max_num_seqs,
+              enforce_eager=not args.cuda_graph,
               max_model_len=args.max_model_len, gpu_memory_utilization=args.util)
     try:
         web.run_app(create_app(llm, model_name=args.model), host=args.host, port=args.port,

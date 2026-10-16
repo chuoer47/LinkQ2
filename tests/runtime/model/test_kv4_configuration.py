@@ -12,8 +12,7 @@ def test_fp16_baseline_needs_no_calibration(tmp_path):
     Qwen3Config(hidden_size=256, num_attention_heads=2, head_dim=128).save_pretrained(tmp_path)
     cfg = Config(str(tmp_path))
     assert cfg.kv_cache_dtype == 'fp16' and cfg.enforce_eager
-    with pytest.raises(ValueError, match='enforce_eager'):
-        Config(str(tmp_path), enforce_eager=False)
+    assert not Config(str(tmp_path), enforce_eager=False).enforce_eager
 
 
 def test_calibration_is_required_before_model_loading(tmp_path):
