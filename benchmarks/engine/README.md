@@ -2,6 +2,8 @@
 
 范围：单卡 Qwen3、普通 eager 推理；FP16/W4 权重与 FP16/KV4 缓存独立选择。默认不使用 CUDA graph、compile 或投机推理。
 
+当前实测见 [第一版结果](RESULTS.md)。
+
 ## 一键运行
 
 在仓库根目录，使用项目环境：
