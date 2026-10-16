@@ -16,6 +16,8 @@ class Scheduler:
         self.block_manager = BlockManager(config.num_kvcache_blocks, config.kvcache_block_size)
         self.waiting: deque[Sequence] = deque()
         self.running: deque[Sequence] = deque()
+        self.enable_chunked_prefill = getattr(config, 'enable_chunked_prefill', False)
+        self.prefill_reserve_blocks = getattr(config, 'prefill_reserve_blocks', 0)
         # Speculative decoding: proposals are filled in by the engine's propose phase;
         #   gamma=0 disables the verify path
         self.gamma = config.spec_num_drafts if config.spec_method else 0
@@ -63,41 +65,62 @@ class Scheduler:
                 return seq
 
     def schedule(self) -> tuple[list[Sequence], bool]:
-        scheduled_seqs = []
-        num_batched_tokens = 0
+        # nano-vLLM PR #276: decode first, then use the remaining token
+        # budget for prefill. Pure decode retains the CUDA Graph path.
+        if self.enable_chunked_prefill:
+            seqs = self._schedule_decode()
+            num_decode = len(seqs)
+            self._schedule_prefill(seqs, num_decode)
+            has_prefill = len(seqs) > num_decode
+        else:
+            seqs = []
+            self._schedule_prefill(seqs, 0)
+            has_prefill = bool(seqs)
+            if not seqs:
+                seqs = self._schedule_decode()
+        if not seqs:
+            raise RuntimeError('scheduler cannot make progress: no sequence can be scheduled')
+        return seqs, has_prefill
 
-        # prefill
+    def _schedule_prefill(self, scheduled_seqs, num_batched_tokens):
+        num_prefill = 0
         while self.waiting and len(scheduled_seqs) < self.max_num_seqs:
             seq = self.waiting[0]
             remaining = self.max_num_batched_tokens - num_batched_tokens
-            if remaining == 0:
+            if remaining <= 0:
                 break
             if not seq.block_table:
-                num_cached_blocks = self.block_manager.can_allocate(seq)
+                num_cached_blocks, num_new_blocks = self.block_manager.can_allocate(seq)
                 if num_cached_blocks == -1:
+                    break
+                if len(self.block_manager.free_block_ids) - num_new_blocks < self.prefill_reserve_blocks:
                     break
                 num_tokens = seq.num_tokens - num_cached_blocks * self.block_size
             else:
                 num_tokens = seq.num_tokens - seq.num_cached_tokens
-            if remaining < num_tokens and scheduled_seqs:  # only allow chunked prefill for the first seq
+            if remaining < num_tokens and num_prefill > 0:
                 break
             if not seq.block_table:
                 self.block_manager.allocate(seq, num_cached_blocks)
             seq.num_scheduled_tokens = min(num_tokens, remaining)
+            seq.is_prefill = True
+            seq.should_sample = seq.num_cached_tokens + seq.num_scheduled_tokens == seq.num_tokens
             num_batched_tokens += seq.num_scheduled_tokens
             if seq.num_cached_tokens + seq.num_scheduled_tokens == seq.num_tokens:
                 seq.status = SequenceStatus.RUNNING
                 self.waiting.popleft()
                 self.running.append(seq)
             scheduled_seqs.append(seq)
+            num_prefill += 1
 
-        if scheduled_seqs:
-            return scheduled_seqs, True
-
+    def _schedule_decode(self):
+        scheduled_seqs = []
         # decode (optionally speculative: a verify step processes
         # M = gamma+1 rows per sequence and commits accepted drafts)
-        while self.running and len(scheduled_seqs) < self.max_num_seqs:
+        limit = self.max_num_seqs if self.gamma else min(self.max_num_seqs, self.max_num_batched_tokens)
+        while self.running and len(scheduled_seqs) < limit:
             seq = self.running.popleft()
+            seq.should_sample = True
             geff = min(self.gamma, self.max_model_len - len(seq)) if self.gamma else 0
             if geff > 0:
                 while not self.block_manager.can_verify(seq, geff):
@@ -131,9 +154,8 @@ class Scheduler:
                 seq.is_prefill = False
                 self.block_manager.may_append(seq)
                 scheduled_seqs.append(seq)
-        assert scheduled_seqs
         self.running.extendleft(reversed(scheduled_seqs))
-        return scheduled_seqs, False
+        return scheduled_seqs
 
     def preempt(self, seq: Sequence):
         seq.status = SequenceStatus.WAITING

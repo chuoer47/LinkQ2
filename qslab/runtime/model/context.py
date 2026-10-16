@@ -16,8 +16,8 @@ class Context:
     context_lens: torch.Tensor | None = None
     block_tables: torch.Tensor | None = None
     # prefill-with-pool-prefix plan (set by prepare_prefill when cu_k > cu_q): prefix_slots
-    #   = the pool slots of every sequence's cached prefix, concatenated in sequence order;
-    #   prefix_plan = [(slot_off, cached, q_start, q_end)] per sequence, computed ONCE per
+    #   = cached prefix slots; decode rows also include their just-stored token.
+    #   prefix_plan = [(slot_off, stored_rows, q_start, q_end, is_prefill)] per sequence, once per
     #   step so no attention layer pays a GPU sync to recompute it
     prefix_slots: torch.Tensor | None = None
     prefix_plan: list | None = None

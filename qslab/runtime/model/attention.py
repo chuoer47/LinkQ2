@@ -43,19 +43,16 @@ class PagedAttention(nn.Module):
         # The slot plan is computed ONCE per step by prepare_prefill: recomputing it per
         #   layer pays a GPU sync each.
         plan = ctx.prefix_plan
-        if self.kv_cache_dtype == 'fp16':
-            kp = self.k_cache.flatten(0, 1)[ctx.prefix_slots]
-            vp = self.v_cache.flatten(0, 1)[ctx.prefix_slots]
-        else:
-            kp, vp = materialize_kv(self.k_cache, self.v_cache, ctx.prefix_slots,
-                                    v_group=self.v_group)
+        kp, vp = materialize_kv(self.k_cache, self.v_cache, ctx.prefix_slots,
+                                v_group=self.v_group)
         k_parts, v_parts = [], []
-        for slot_off, cached, q_start, q_end in plan:
+        for slot_off, cached, q_start, q_end, is_prefill in plan:
             if cached > 0:
                 k_parts.append(kp[slot_off:slot_off + cached])
                 v_parts.append(vp[slot_off:slot_off + cached])
-            k_parts.append(k[q_start:q_end])
-            v_parts.append(v[q_start:q_end])
+            if is_prefill:
+                k_parts.append(k[q_start:q_end])
+                v_parts.append(v[q_start:q_end])
         return torch.cat(k_parts), torch.cat(v_parts)
 
     def set_smooth_lambda(self, lam: torch.Tensor):

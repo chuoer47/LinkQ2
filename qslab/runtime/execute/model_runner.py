@@ -216,22 +216,24 @@ class ModelRunner:
         prefix_plan = None
         if cu_seqlens_k[-1] > cu_seqlens_q[-1]:    # prefix cache / chunked
             block_tables = self.prepare_block_tables(seqs)
-            # one slot plan for all 28 layers (see Context.prefix_slots)
-            slots = []
-            prefix_plan = []
-            q_off = 0
-            for seq in seqs:
-                cached = seq.num_cached_tokens
-                sched = seq.num_scheduled_tokens
-                if sched == 0:
-                    continue
-                prefix_plan.append((len(slots), cached, q_off, q_off + sched))
-                for j in range(cached):
-                    slots.append(seq.block_table[j // self.block_size] * self.block_size
-                                 + j % self.block_size)
-                q_off += sched
-            prefix_slots = torch.tensor(slots, dtype=torch.int64,
-                                        pin_memory=True).cuda(non_blocking=True)
+            if self.config.kv_cache_dtype == 'kv4':
+                # one slot plan for all 28 layers (see Context.prefix_slots)
+                slots = []
+                prefix_plan = []
+                q_off = 0
+                for seq in seqs:
+                    cached = seq.num_cached_tokens
+                    sched = seq.num_scheduled_tokens
+                    if sched == 0:
+                        continue
+                    stored = cached if seq.is_prefill else cached + sched
+                    prefix_plan.append((len(slots), stored, q_off, q_off + sched, seq.is_prefill))
+                    for j in range(stored):
+                        slots.append(seq.block_table[j // self.block_size] * self.block_size
+                                     + j % self.block_size)
+                    q_off += sched
+                prefix_slots = torch.tensor(slots, dtype=torch.int64,
+                                            pin_memory=True).cuda(non_blocking=True)
         input_ids = torch.tensor(input_ids, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
         positions = torch.tensor(positions, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
         cu_seqlens_q = torch.tensor(cu_seqlens_q, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
@@ -394,16 +396,7 @@ class ModelRunner:
     @torch.inference_mode()
     def run_model(self, input_ids: torch.Tensor, positions: torch.Tensor, is_prefill: bool):
         if is_prefill or self.enforce_eager or input_ids.size(0) > max(self.graph_bs):
-            hidden = self.model(input_ids, positions)
-            if is_prefill:
-                # only the last token of each scheduled sequence produces logits
-                # (sampling happens at sequence boundaries); gathering all
-                # positions would break the per-seq temperature broadcast
-                cu = get_context().cu_seqlens_q
-                last_idx = (cu[1:] - 1) if cu is not None else torch.tensor(
-                    [hidden.size(0) - 1], device=hidden.device)
-                hidden = hidden[last_idx]
-            return self.model.compute_logits(hidden)
+            return self.model(input_ids, positions)
         else:
             bs = input_ids.size(0)
             context = get_context()
@@ -419,13 +412,23 @@ class ModelRunner:
             graph_vars["block_tables"][:bs, :context.block_tables.size(1)] = context.block_tables
             graph.replay()
             self.graph_replays += 1
-            return self.model.compute_logits(graph_vars["outputs"][:bs])
+            return graph_vars["outputs"][:bs]
 
+    @torch.inference_mode()
     def run(self, seqs: list[Sequence], is_prefill: bool) -> list[int]:
         input_ids, positions = self.prepare_prefill(seqs) if is_prefill else self.prepare_decode(seqs)
-        temperatures = self.prepare_sample(seqs)
-        logits = self.run_model(input_ids, positions, is_prefill)
-        token_ids = self.sampler(logits, temperatures).tolist()
+        hidden = self.run_model(input_ids, positions, is_prefill)
+        sample_seqs = [seq for seq in seqs if seq.should_sample]
+        token_ids = [0] * len(seqs)
+        if sample_seqs:
+            if is_prefill:
+                cu = get_context().cu_seqlens_q
+                flags = torch.tensor([seq.should_sample for seq in seqs], device=cu.device, dtype=torch.bool)
+                indices = torch.nonzero(flags, as_tuple=True)[0]
+                hidden = hidden[(cu[indices + 1] - 1).long()]
+            logits = self.model.compute_logits(hidden)
+            sampled = iter(self.sampler(logits, self.prepare_sample(sample_seqs)).tolist())
+            token_ids = [next(sampled) if seq.should_sample else 0 for seq in seqs]
         reset_context()
         return token_ids
 

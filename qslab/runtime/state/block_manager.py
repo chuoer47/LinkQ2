@@ -62,10 +62,10 @@ class BlockManager:
     #   run only by the int4 quantization error.
     ENABLE_PREFIX_CACHE = True
 
-    def can_allocate(self, seq: Sequence) -> int:
+    def can_allocate(self, seq: Sequence) -> tuple[int, int]:
         if not self.ENABLE_PREFIX_CACHE:
             # still refuse when the pool cannot take the whole sequence
-            return 0 if len(self.free_block_ids) >= seq.num_blocks else -1
+            return (0, seq.num_blocks) if len(self.free_block_ids) >= seq.num_blocks else (-1, -1)
         h = -1
         num_cached_blocks = 0
         num_new_blocks = seq.num_blocks
@@ -79,8 +79,8 @@ class BlockManager:
             if block_id in self.used_block_ids:
                 num_new_blocks -= 1
         if len(self.free_block_ids) < num_new_blocks:
-            return -1
-        return num_cached_blocks
+            return -1, -1
+        return num_cached_blocks, num_new_blocks
 
     def allocate(self, seq: Sequence, num_cached_blocks: int):
         assert not seq.block_table

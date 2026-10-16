@@ -54,6 +54,8 @@ with LLM("models/Qwen3-8B", max_num_seqs=4) as llm:
 
 输入必须非空且短于 `max_model_len`，输出预算按剩余上下文截断；单条请求无法容纳于 KV 池时立即拒绝。请求完成、取消或执行异常后归还页面，`llm.close()` 释放模型与池；前缀缓存可保留零引用页面内容用于复用。HTTP 断连会取消请求，执行线程失败会通知等待中的客户端。
 
+`enable_chunked_prefill=True, max_num_batched_tokens=64` 开启 decode 优先的混合分块预填充；纯 decode 保持 CUDA Graph，含 prefill 的批次使用 varlen。CLI/HTTP 使用 `--chunked-prefill --max-num-batched-tokens 64`。该策略来自 nano-vLLM PR #276，当前不与投机推理组合，来源和适配见 [上游说明](qslab/runtime/UPSTREAM.md)。
+
 ## 验证和 benchmark
 
 ```bash

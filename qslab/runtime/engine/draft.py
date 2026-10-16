@@ -15,7 +15,7 @@ from __future__ import annotations
 import torch
 
 from qslab.runtime.config import Config
-from qslab.runtime.model.context import reset_context, set_context
+from qslab.runtime.model.context import reset_context, set_context, get_context
 from qslab.runtime.execute.model_runner import ModelRunner
 from qslab.runtime.execute.sampler import Sampler  # noqa: F401  (import order sanity)
 from qslab.runtime.sampling_params import SamplingParams
@@ -194,7 +194,8 @@ class DraftProposer:
         #   a proposal whose p is unknown cannot be ratio-tested losslessly.
         mr = self.runner
         input_ids, positions = mr.prepare_prefill(draft_seqs)
-        logits = mr.run_model(input_ids, positions, True)
+        hidden = mr.run_model(input_ids, positions, True)
+        logits = mr.model.compute_logits(hidden[get_context().cu_seqlens_q[1:] - 1])
         tok, probs = _sample_rows(logits, [d.temperature for d in draft_seqs])
         reset_context()
         return tok.tolist(), probs
@@ -256,7 +257,7 @@ class DraftProposer:
             bt = [d.block_table + [-1] * (max_len - len(d.block_table)) for d in active]
             bt = torch.tensor(bt, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
             set_context(False, slot_mapping=slots, context_lens=ctx, block_tables=bt)
-            logits = mr.run_model(input_ids, positions, False)
+            logits = mr.model.compute_logits(mr.run_model(input_ids, positions, False))
             reset_context()
             tok, probs = _sample_rows(logits, temps)
             tok = tok.tolist()

@@ -44,6 +44,8 @@ def build_parser() -> argparse.ArgumentParser:
     # runtime sizing
     g.add_argument("--max-model-len", type=int, default=4096)
     g.add_argument("--max-num-seqs", type=int, default=None)
+    g.add_argument("--chunked-prefill", action='store_true')
+    g.add_argument("--max-num-batched-tokens", type=int, default=None)
     g.add_argument("--gpu-memory-utilization", type=float, default=None)
     execution = g.add_mutually_exclusive_group()
     execution.add_argument("--enforce-eager", action="store_true", help="skip CUDA graphs")
@@ -68,7 +70,9 @@ def main(argv: list[str] | None = None) -> int:
 
     from qslab.api.llm import LLM, SamplingParams
     runtime = {"max_model_len": args.max_model_len}
+    runtime['enable_chunked_prefill'] = args.chunked_prefill
     for flag, key in (("max_num_seqs", "max_num_seqs"),
+                      ("max_num_batched_tokens", "max_num_batched_tokens"),
                       ("gpu_memory_utilization", "gpu_memory_utilization")):
         v = getattr(args, flag)
         if v is not None:

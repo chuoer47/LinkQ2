@@ -18,6 +18,8 @@ class Config:
     kvcache_block_size: int = 256
     num_kvcache_blocks: int = -1
     kv_cache_dtype: str = "fp16"    # fp16 | kv4; independent of weight quantization
+    enable_chunked_prefill: bool = False
+    prefill_reserve_blocks: int = 0
     v_group: int = 64              # V quant group size along head_dim
     smooth_kv: str | None = None   # SmoothAttention calibration file
     quant_backend: str = "gemlite"    # local fused W4A16 backend
@@ -40,6 +42,10 @@ class Config:
         assert os.path.isdir(self.model)
         if self.kv_cache_dtype not in {"fp16", "kv4"}:
             raise ValueError('kv_cache_dtype must be fp16 or kv4')
+        if self.enable_chunked_prefill and self.spec_method:
+            raise ValueError('mixed chunked prefill currently requires spec_method=None')
+        if self.prefill_reserve_blocks < 0:
+            raise ValueError('prefill_reserve_blocks must be nonnegative')
         if self.kv_cache_dtype == 'kv4' and not self.smooth_kv:
             raise ValueError('KV4 requires smooth_kv calibration with positive static K scales')
         if self.smooth_kv and not Path(self.smooth_kv).is_file():
