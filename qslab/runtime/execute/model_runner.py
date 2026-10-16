@@ -112,19 +112,21 @@ class ModelRunner:
             if hasattr(module, "k_cache") and hasattr(module, "v_cache"):
                 module.k_cache = self.kv_cache[layer_id][0]
                 module.v_cache = self.kv_cache[layer_id][1]
-                if getattr(module, "v_group", None) is None:
-                    module.v_group = vg
+                module.v_group = vg
                 layer_id += 1
         self.load_smoothing(config.smooth_kv)
 
     def load_smoothing(self, path: str | None):
         """Fold the calibrated SmoothAttention factors into the pool."""
-        if not path:
-            return
-        ck = torch.load(path, map_location="cuda", weights_only=False)
+        ck = torch.load(path, map_location="cuda", weights_only=True)
         lam, kscale = ck["lambda"].float(), ck["kscale"].float()
-        assert lam.shape[0] == self.config.hf_config.num_hidden_layers, \
-            "layer count mismatch"
+        cfg = self.config.hf_config
+        head_dim = getattr(cfg, 'head_dim', cfg.hidden_size // cfg.num_attention_heads)
+        expected = (cfg.num_hidden_layers, cfg.num_key_value_heads, head_dim)
+        for name, tensor in [('lambda', lam), ('kscale', kscale)]:
+            stored = tensor.half()
+            if tensor.shape != expected or not torch.isfinite(stored).all() or (stored <= 0).any():
+                raise ValueError(f'{name} must have shape {expected} and finite positive FP16 values')
         layer_id = 0
         for module in self.model.modules():
             if hasattr(module, "k_cache") and hasattr(module, "v_cache"):

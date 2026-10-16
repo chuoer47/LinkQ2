@@ -1,5 +1,6 @@
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from transformers import AutoConfig
 
 
@@ -36,8 +37,17 @@ class Config:
 
     def __post_init__(self):
         assert os.path.isdir(self.model)
+        if not self.smooth_kv:
+            raise ValueError('KV4 requires smooth_kv calibration with positive static K scales')
+        if not Path(self.smooth_kv).is_file():
+            raise FileNotFoundError(self.smooth_kv)
         assert self.kvcache_block_size % 128 == 0  # qslab: KV4 block alignment
         self.hf_config = AutoConfig.from_pretrained(self.model)
+        head_dim = getattr(self.hf_config, 'head_dim',
+                           self.hf_config.hidden_size // self.hf_config.num_attention_heads)
+        if (self.v_group < 8 or self.v_group & (self.v_group - 1)
+                or head_dim % self.v_group):
+            raise ValueError('v_group must be a power of two >= 8 and divide head_dim')
         if self.rope_scaling:
             scaling = dict(self.rope_scaling)
             native = int(self.hf_config.max_position_embeddings)
