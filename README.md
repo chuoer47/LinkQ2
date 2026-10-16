@@ -66,4 +66,6 @@ python -m benchmarks.w4a16.run --gpu 1
 第一条验证完整包、tokenizer、独立加载、8×512 token 的 real/fake PPL 与短 decode；第二条另测 HF prefill/decode 性能。
 KV4 与 FP16 KV 的独立对照使用 `python -m benchmarks.kv4.run --gpu 1`，范围与计时口径见 [KV4 README](benchmarks/kv4/README.md)。
 引擎第一版的四种权重/KV 组合、生命周期和端到端延迟使用 `python -m benchmarks.engine.run --gpu 1`，见 [引擎 README](benchmarks/engine/README.md)。
+CUDA Graph 配对对照使用 `python -m benchmarks.cuda_graph.run --gpu 1`，见 [Graph README](benchmarks/cuda_graph/README.md)；W4 的严格数值一致性限制见其结果记录。
+混合 Chunked Prefill 三请求对照使用 `python -m benchmarks.chunked_prefill.run --gpu 1`，见 [分块预填充 README](benchmarks/chunked_prefill/README.md)。
 详细口径见 [benchmark README](benchmarks/w4a16/README.md)，架构见 [主链路说明](docs/PROJECT_MAINLINE.md)。

@@ -1,5 +1,7 @@
 # 混合分块预填充验收
 
+本轮测量见 [结果记录](RESULTS.md)。
+
 ```bash
 .conda/bin/python -m benchmarks.chunked_prefill.run --gpu 1
 ```
