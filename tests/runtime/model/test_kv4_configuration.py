@@ -34,7 +34,8 @@ def test_invalid_v_group_is_refused(tmp_path, group):
 
 @pytest.mark.gpu
 @pytest.mark.parametrize('group', [32, 128])
-def test_pool_binding_uses_configured_group(tmp_path, monkeypatch, group):
+@pytest.mark.parametrize('block_size', [128, 256])
+def test_pool_binding_uses_configured_group_and_page(tmp_path, monkeypatch, group, block_size):
     from torch import nn
     from qslab.runtime.execute.model_runner import ModelRunner
     from qslab.runtime.model.attention import PagedAttention
@@ -48,8 +49,8 @@ def test_pool_binding_uses_configured_group(tmp_path, monkeypatch, group):
     runner = ModelRunner.__new__(ModelRunner)
     runner.config = SimpleNamespace(hf_config=cfg, v_group=group, smooth_kv=str(calibration),
                                     gpu_memory_utilization=0.9, num_kvcache_blocks=-1,
-                                    kv_cache_dtype='kv4', max_model_len=128, max_num_seqs=1)
-    runner.block_size = 128
+                                    kv_cache_dtype='kv4', max_model_len=block_size * 2, max_num_seqs=1)
+    runner.block_size = block_size
     runner.model = nn.ModuleList([PagedAttention(2, 128, 128**-0.5, 2)])
     monkeypatch.setattr(torch.cuda, 'mem_get_info', lambda: (2**20, 2**20))
     monkeypatch.setattr(torch.cuda, 'memory_stats', lambda: {
@@ -57,14 +58,16 @@ def test_pool_binding_uses_configured_group(tmp_path, monkeypatch, group):
     runner.allocate_kv_cache()
     attention = runner.model[0]
     assert attention.v_group == group
+    assert attention.block_n == block_size
     assert attention.v_cache[1].shape[-1] == 128 // group
     q = torch.randn(1, 2, 128, device='cuda', dtype=torch.float16)
     k = torch.randn_like(q) * 0.1
     v = torch.randn_like(q) * 0.1
-    slots = torch.tensor([0], device='cuda', dtype=torch.int32)
+    # Page 1 distinguishes logical-page stride from a coincidental slot-0 hit.
+    slots = torch.tensor([block_size], device='cuda', dtype=torch.int32)
     set_context(False, slot_mapping=slots,
                 context_lens=torch.ones(1, device='cuda', dtype=torch.int32),
-                block_tables=torch.zeros(1, 1, device='cuda', dtype=torch.int32))
+                block_tables=torch.ones(1, 1, device='cuda', dtype=torch.int32))
     try:
         actual = attention(q, k, v)
         _, restored_v = materialize_kv(attention.k_cache, attention.v_cache, slots, v_group=group)

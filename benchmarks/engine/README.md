@@ -24,7 +24,7 @@
 
 - 四种组合：`fp16-fp16`、`fp16-kv4`、`w4-fp16`、`w4-kv4`。每种配置独立进程、顺序运行，固定 4 页×256 token KV 容量。
 - 执行正确性：3 个短提示，各生成 16 token；原始权重对照 HF FP16，W4 对照相同产物的 HF fake。先比较自由生成，再固定参考历史比较全部 48 个位置的 logits、top1 和参考 token NLL 差异。
-- FP16 KV 的 logits 相对 L2 须不超过 0.02、teacher-forced top1 一致率至少 95%；KV4 记录近似误差并检查有限值。此项不替代 W4/KV4 已有 PPL benchmark，也不把自由生成分叉直接视为算子错误。
+- FP16 KV 的 logits 相对 L2 须不超过 0.02、teacher-forced top1 一致率至少 95%；KV4 的对应门槛为 0.3 和 80%，用于发现明显的集成错误。这些是小样本验收阈值，不是精度保证；不替代 W4/KV4 已有 PPL benchmark，也不把自由生成分叉直接视为算子错误。
 - 生命周期：空输入、超长输入拒绝；上下文边界截断并结束；等待与运行中的取消；正常完成后页面引用归零；关闭引擎后释放模型和池。执行异常与 HTTP pump 回收另有回归测试。
 - 性能：WikiText 固定首段取 128/512 token，各生成 16 token；每种形状完整预热 1 次，测 3 次取中位数。关闭前缀复用，保证每次完整 prefill。
 - 计时：同步主机墙钟，从 token ID 请求入队至最后 token 提交，包含调度、输入张量准备、模型、KV、lm_head、采样、回收；不含加载、tokenize/detokenize、HTTP 和参考对照。

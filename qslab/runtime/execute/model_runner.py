@@ -142,6 +142,7 @@ class ModelRunner:
                 module.k_cache = self.kv_cache[layer_id][0]
                 module.v_cache = self.kv_cache[layer_id][1]
                 module.v_group = vg
+                module.block_n = self.block_size
                 module.kv_cache_dtype = mode
                 layer_id += 1
         if config.smooth_kv:

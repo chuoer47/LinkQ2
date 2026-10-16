@@ -182,6 +182,9 @@ def main():
     if args.kv == 'fp16':
         result['passed'] &= (result['quality']['relative_l2'] <= 0.02
                              and result['quality']['teacher_forced_top1_agreement'] >= 0.95)
+    else:
+        result['passed'] &= (result['quality']['relative_l2'] <= 0.3
+                             and result['quality']['teacher_forced_top1_agreement'] >= 0.8)
     args.out.write_text(json.dumps(result, indent=2), encoding='utf-8')
     save_config(tuning)
     if not result['passed']:
