@@ -1,11 +1,13 @@
 """Small decode attribution experiment; runtime and kernel implementations are unchanged."""
 import argparse
+import cProfile
 from collections import Counter, defaultdict
 from datetime import datetime
 import gzip
 import json
 import os
 from pathlib import Path
+import pstats
 from statistics import median
 import subprocess
 import sys
@@ -62,13 +64,13 @@ def trace_summary(path):
             for target, key in [(groups, family(event['name'])), (names, event['name'])]:
                 target[key]['count'] += 1
                 target[key]['ms'] += event['dur'] / 1000
-        runtime = [e for e in selected if e.get('cat') == 'cuda_runtime']
+        runtime = [e for e in selected if e.get('cat') in ['cuda_runtime', 'cuda_driver']]
         rows.append({'scope': scope['name'], 'host_range_ms': scope['dur'] / 1000,
                      'kernel_count': len(kernels), 'kernel_sum_ms': sum(e['dur'] for e in kernels) / 1000,
                      'gpu_span_ms': span / 1000, 'gpu_busy_ms': busy / 1000,
                      'gpu_gap_ms': (span - busy) / 1000,
-                     'runtime_calls': dict(Counter(e['name'] for e in runtime)),
-                     'runtime_sum_ms': sum(e['dur'] for e in runtime) / 1000,
+                     'cuda_api_calls': dict(Counter(e['name'] for e in runtime)),
+                     'cuda_api_sum_ms': sum(e['dur'] for e in runtime) / 1000,
                      'families': dict(groups), 'kernels': dict(names)})
     with gzip.open(str(path) + '.gz', 'wt', encoding='utf-8') as out:
         json.dump(data, out)
@@ -93,6 +95,20 @@ def timed(call, torch):
 
 def medians(rows):
     return {key: median(r[key] for r in rows) for key in rows[0] if isinstance(rows[0][key], (int, float))}
+
+
+def cpu_profile(call, torch, path):
+    """Call stacks are attribution only; cProfile overhead is excluded from latency."""
+    profiler = cProfile.Profile()
+    torch.cuda.synchronize()
+    profiler.enable()
+    for _ in range(3):
+        call()
+    profiler.disable()
+    torch.cuda.synchronize()
+    profiler.dump_stats(str(path))
+    with path.with_suffix('.txt').open('w') as stream:
+        pstats.Stats(profiler, stream=stream).strip_dirs().sort_stats('cumulative').print_stats(40)
 
 
 def worker(args):
@@ -168,6 +184,8 @@ def worker(args):
                                  'context_lens': gv['context_lens'].tolist(),
                                  'block_tables': gv['block_tables'].tolist(),
                                  'slot_mapping': gv['slot_mapping'].tolist()}
+        for execution, call in calls.items():
+            cpu_profile(call, torch, args.out / f'{args.worker}-{execution}.pstats')
         path = args.out / (args.worker + '.trace.json')
         with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CPU,
                                                torch.profiler.ProfilerActivity.CUDA]) as profiler:
@@ -200,14 +218,27 @@ def report(out):
         e, g = row['engine']['eager']['median'], row['engine']['graph']['median']
         se, sg = row['static']['eager']['median'], row['static']['graph']['median']
         lines.append(f"| {row['mode']} | {e['tpot_ms']:.3f} | {g['tpot_ms']:.3f} | {se['wall_ms']:.3f} | {sg['wall_ms']:.3f} |")
-    lines += ['', '| 配置 | 执行 | kernel 数 | kernel 累计 ms | GPU 首尾跨度 ms | GPU 活动间隙 ms | host call ms（无 Profiler） |',
-              '|---|---|---:|---:|---:|---:|---:|']
+    lines += ['', '| 配置 | 执行 | kernel 数 | kernel 累计 ms | GPU 首尾跨度 ms | GPU 活动间隙 ms | host call ms（无 Profiler） | kernel / Graph 下发次数 |',
+              '|---|---|---:|---:|---:|---:|---:|---:|']
     for row in rows:
         for execution in ['eager', 'graph']:
             trace = [r for r in row['trace'] if r['scope'].split('/')[1] == execution]
             m = medians(trace)
             host = row['static'][execution]['median']['host_call_ms']
-            lines.append(f"| {row['mode']} | {execution} | {m['kernel_count']:.0f} | {m['kernel_sum_ms']:.3f} | {m['gpu_span_ms']:.3f} | {m['gpu_gap_ms']:.3f} | {host:.3f} |")
+            launches = median(sum(v for k, v in t['cuda_api_calls'].items()
+                                  if k in ['cudaLaunchKernel', 'cuLaunchKernel', 'cudaGraphLaunch']) for t in trace)
+            lines.append(f"| {row['mode']} | {execution} | {m['kernel_count']:.0f} | {m['kernel_sum_ms']:.3f} | {m['gpu_span_ms']:.3f} | {m['gpu_gap_ms']:.3f} | {host:.3f} | {launches:.0f} |")
+    lines += ['', '| 配置 | 执行 | Linear 累计 ms | attention 累计 ms | KV store 累计 ms | 其他 kernel 累计 ms |',
+              '|---|---|---:|---:|---:|---:|']
+    for row in rows:
+        for execution in ['eager', 'graph']:
+            trace = [r for r in row['trace'] if r['scope'].split('/')[1] == execution]
+            groups = {}
+            for name, families in [('linear', ['w4_linear', 'fp16_linear']),
+                                   ('attention', ['kv4_attention', 'fp16_attention']),
+                                   ('store', ['kv_store']), ('other', ['other'])]:
+                groups[name] = median(sum(t['families'].get(f, {}).get('ms', 0) for f in families) for t in trace)
+            lines.append(f"| {row['mode']} | {execution} | {groups['linear']:.3f} | {groups['attention']:.3f} | {groups['store']:.3f} | {groups['other']:.3f} |")
     lines += ['', '固定 forward：同一进程、权重、已填充 KV、token=42、position=512、相同地址和元数据。',
               'eager 与捕获均执行模型 forward 并复制到同一输出缓冲；不包含 lm_head、采样、调度和元数据上传。',
               '完整 TPOT 沿用引擎 benchmark；图外包含 lm_head、采样、调度和元数据上传。',
