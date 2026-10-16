@@ -42,7 +42,7 @@ def report(output, modes):
     lines += ['', 'W4 与相同 checkpoint 的 HF fake 配对，KV4 与对应浮点 KV 参考配对。这里验证执行正确性，不替代量化 PPL 实验。',
               '每个形状完整预热一次、测量三次取中位数；实际次数见 run.json。计时关闭前缀复用，排除加载、tokenize/detokenize、参考对照和首次编译。',
               'TPOT 为首 token 到最后 token 的平均间隔；吞吐为输出 token 数除以整次请求耗时。',
-              '四种配置固定 4×256 token 的 KV 容量，显存 allocated 不含 CUDA 上下文；启动峰值含加载和引擎预热。',
+              '四种配置固定 4×256 token 的 KV 容量，显存 allocated 不含 CUDA 上下文；启动峰值含加载和引擎预热。close 后与预先初始化的 cuBLAS 工作区基线比较。',
               '本轮不验收并发调度、CUDA graph、投机推理或 HTTP 吞吐。']
     (output / 'report.md').write_text('\n'.join(lines) + '\n', encoding='utf-8')
     (output / 'summary.json').write_text(json.dumps({mode: {

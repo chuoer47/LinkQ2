@@ -30,6 +30,8 @@
 - 计时：同步主机墙钟，从 token ID 请求入队至最后 token 提交，包含调度、输入张量准备、模型、KV、lm_head、采样、回收；不含加载、tokenize/detokenize、HTTP 和参考对照。
 - 指标：TTFT、TPOT、整次请求延迟、输出 token/s、相对 FP16 基线的 TPOT 加速比，以及权重/固定 KV 字节数、常驻 allocated、启动及运行峰值 allocated、close 后 allocated。
 
+关闭后的显存与预先初始化的 cuBLAS 工作区基线比较，允许 1 MiB 测量余量。当前环境 cuBLAS 保留 8.125 MiB；已通过独立检查确认模型关闭后无存活 CUDA Tensor，清理 cuBLAS 工作区后 allocated 归零。正式推理不主动清理进程共享的库工作区。
+
 默认规模很小；本轮不验证多请求公平性、抢占压力、CUDA graph 或投机加速。FP16 KV 目前只支持 eager，分页读写使用官方 FlashAttention 接口，未修改第三方算子的计算实现。
 
 ## 结果与复现

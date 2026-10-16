@@ -130,6 +130,13 @@ def main():
         load_config(tuning)
     ids = json.loads(args.inputs.read_text())['token_ids']
     torch.cuda.init()
+    # cuBLAS owns a process-lifetime workspace, separate from model tensors.
+    # Initialize it before measuring the allocation baseline for close().
+    warm = torch.zeros(16, 16, device='cuda', dtype=torch.float16)
+    warm = warm @ warm
+    del warm
+    torch.cuda.synchronize()
+    torch.cuda.empty_cache()
     torch.cuda.reset_peak_memory_stats()
     before = torch.cuda.memory_allocated()
     start = perf_counter()
@@ -143,6 +150,7 @@ def main():
     engine.scheduler.block_manager.ENABLE_PREFIX_CACHE = False
     result = {'model': args.model, 'kv': args.kv, 'gpu': torch.cuda.get_device_name(),
         'torch': torch.__version__, 'load_seconds': perf_counter() - start,
+        'library_baseline_allocated_bytes': before,
         'weight_bytes': llm.weight_memory_bytes(), 'kv_bytes': llm.kv_memory_bytes(),
         'resident_allocated_bytes': torch.cuda.memory_allocated(),
         'startup_peak_allocated_bytes': torch.cuda.max_memory_allocated(),
