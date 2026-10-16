@@ -24,3 +24,15 @@
 精度沿用三段提示×16 个位置的 HF 参考，并保存相同参考历史下的 logits。graph/eager 配对要求相对 L2≤0.001、top1 一致率≥99%；这是执行一致性检查，不重新评判量化 PPL。
 
 输出 `results/cuda_graph/<时间>/`：提交与参数、参考、原始 JSON/logits、日志、摘要及中文 `report.md`。上游固定版本与适配范围见 `qslab/runtime/UPSTREAM.md`。
+
+Decode 加速归因可单独运行：
+
+```bash
+.conda/bin/python -m benchmarks.cuda_graph.profile --gpu 1
+```
+
+默认 512 token 输入、16 token 输出，三次完整请求测量；增加 W4/KV16、FP16/KV4 两组消融。每组在同一进程交替测 eager/graph，复用相同权重和 KV 池。固定 forward 进一步使用相同 token、已填充 KV、地址、元数据和输出复制，排除调度、lm_head、采样。无需重新量化、生成 HF 参考或跑 PPL。
+
+无 Profiler 延迟与 PyTorch Profiler 时间线分开采集。时间线记录 kernel 数量、累计耗时、GPU 活动间隙和 CUDA API 调用；间隙不能直接视为 CPU 计算耗时，CUDA Event 时间也包含 CPU 下发不及时产生的空隙。不会直接测硬件显存带宽。默认每种执行采三次固定 forward，压缩 trace 可用 Perfetto 查看。
+
+可用 `--tuning results/cuda_graph/2026-10-16/autotune.json` 复用已有调优参数。输出 `results/cuda_graph_profile/<时间>/`，包含参数、各组 JSON、调优参数、压缩 trace、日志及中文报告。只采集性能和执行结构，不改变已有 W4 严格数值一致性未通过的结论。
