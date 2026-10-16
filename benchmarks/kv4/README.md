@@ -13,6 +13,7 @@ python -m benchmarks.kv4.run --gpu 1
 ```
 
 需要与 torch 匹配的 FlashAttention。本轮环境为 torch 2.7.1+cu126、FlashAttention 2.8.3，均安装在项目环境。
+Python 3.10、torch 2.7、CXX11 ABI=True 可安装本轮使用的[官方 wheel](https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3%2Bcu12torch2.7cxx11abiTRUE-cp310-cp310-linux_x86_64.whl)。FP16 参考调用的[官方分页接口](https://github.com/Dao-AILab/flash-attention/blob/v2.8.3/flash_attn/flash_attn_interface.py)不包含自写 attention 计算。
 默认原模型为 `models/Qwen3-8B`。若 `datasets/kv4/qwen3-8b.pt` 不存在，先用现有 C4 训练 token 的 8×512 重新校准。
 可通过 `--model`、`--calibration`、`--calibration-tokens`、`--samples`、`--v-group`、`--out` 修改配置。
 
@@ -47,3 +48,5 @@ CUDA_VISIBLE_DEVICES=1 python -m pytest \
 ```
 
 覆盖必需校准文件、有效静态 scale、非默认 V 分组的真实读写、分页与因果边界。
+
+已完成的修复与实测结果见 [结果记录](RESULTS.md)。
