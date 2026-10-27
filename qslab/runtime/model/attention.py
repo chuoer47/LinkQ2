@@ -1,0 +1,144 @@
+"""Qslab runtime attention: flash-attn prefill + quantized paged decode."""
+# Ordering follows nano-vllm: store BEFORE attention. decode's context_lens includes the
+#   token being processed, so its KV must already sit in its slot when the kernel reads the
+#   cache.
+# SmoothAttention (optional, from a calibration file): q *= lambda and k /= lambda after
+#   RoPE. The logits are unchanged but K's per-channel outliers flatten, so one static int4
+#   scale per channel suffices. lambda is per KV head and broadcasts over each GQA group.
+from __future__ import annotations
+
+import torch
+from torch import nn
+
+from flash_attn import flash_attn_varlen_func, flash_attn_with_kvcache
+
+from qslab.runtime.model.context import get_context
+from qslab.kernels.fp16_kv import store_kvcache
+from qslab.kernels.kv4 import (materialize_kv, paged_attention_decode,
+                               store_kv_quant)
+
+
+class PagedAttention(nn.Module):
+    """One attention layer's interface into the quantized paged KV pool."""
+
+    def __init__(self, num_heads: int, head_dim: int, scale: float,
+                 num_kv_heads: int, block_n: int = 128, v_group: int = 64):
+        super().__init__()
+        self.num_heads = num_heads
+        self.head_dim = head_dim
+        self.scale = scale
+        self.num_kv_heads = num_kv_heads
+        self.block_n = block_n
+        self.v_group = v_group
+        self.k_cache = self.v_cache = None      # (packed, scales) tuples
+        self.kv_cache_dtype = 'kv4'
+        self.lam = None                         # [H_kv, D] SmoothAttention
+        self.lam_q = None                       # [H_q, D] GQA-expanded
+
+    def _materialize_prefix(self, ctx, k, v):
+        """Dequantize the pool-resident prefix of each sequence and prepend it to this
+        batch's freshly computed rows."""
+        # Returned tensors are ordered by cu_seqlens_k (prefix rows first, per sequence),
+        #   which is what flash-attn consumes, while k/v in are ordered by cu_seqlens_q.
+        # The slot plan is computed ONCE per step by prepare_prefill: recomputing it per
+        #   layer pays a GPU sync each.
+        plan = ctx.prefix_plan
+        kp, vp = materialize_kv(self.k_cache, self.v_cache, ctx.prefix_slots,
+                                v_group=self.v_group)
+        k_parts, v_parts = [], []
+        for slot_off, cached, q_start, q_end, is_prefill in plan:
+            if cached > 0:
+                k_parts.append(kp[slot_off:slot_off + cached])
+                v_parts.append(vp[slot_off:slot_off + cached])
+            if is_prefill:
+                k_parts.append(k[q_start:q_end])
+                v_parts.append(v[q_start:q_end])
+        return torch.cat(k_parts), torch.cat(v_parts)
+
+    def set_smooth_lambda(self, lam: torch.Tensor):
+        """lam [H_kv, D] from the calibration file."""
+        self.lam = lam
+        n_rep = self.num_heads // self.num_kv_heads
+        self.lam_q = lam.repeat_interleave(n_rep, dim=0).contiguous()
+
+    # Dynamo must not trace this: it reads the global Context (recreated every step), which
+    #   would churn guards; with it disabled, torch.compile graph-breaks here and fuses
+    #   everything in between — which is the point of the compiled draft
+    @torch._dynamo.disable
+    def forward(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor):
+        ctx = get_context()
+        k_cache, v_cache = self.k_cache, self.v_cache
+
+        if self.lam is not None:
+            # (Q*L)(K/L)^T leaves the logits unchanged; only the quantization
+            # difficulty of K moves. Done after RoPE, so the encoder sees the
+            # smoothed key.
+            q = (q * self.lam_q.to(q.dtype))
+            k = (k / self.lam.to(k.dtype))
+
+        if self.kv_cache_dtype == 'fp16':
+            if k_cache is not None:
+                store_kvcache(k, v, k_cache, v_cache, ctx.slot_mapping)
+            if ctx.is_prefill:
+                # Upstream paged varlen path reads chunk/prefix KV directly.
+                if ctx.block_tables is not None:
+                    k, v = k_cache, v_cache
+                return flash_attn_varlen_func(q, k, v,
+                    cu_seqlens_q=ctx.cu_seqlens_q, cu_seqlens_k=ctx.cu_seqlens_k,
+                    max_seqlen_q=ctx.max_seqlen_q, max_seqlen_k=ctx.max_seqlen_k,
+                    softmax_scale=self.scale, causal=True, block_table=ctx.block_tables)
+            batch = ctx.context_lens.numel()
+            rows = q.shape[0] // batch
+            # KV was stored above. No append in FlashAttention, so graph-padding
+            # rows with slot=-1 cannot overwrite any live sequence's cache.
+            return flash_attn_with_kvcache(
+                q.reshape(batch, rows, self.num_heads, self.head_dim),
+                k_cache, v_cache, cache_seqlens=ctx.context_lens + rows - 1,
+                block_table=ctx.block_tables, softmax_scale=self.scale,
+                causal=True).flatten(0, 1)
+
+        # store FIRST (nano-vllm ordering): the decode kernel reads the
+        # current token's own KV from the pool (context_lens includes it).
+        if self.kv_cache_dtype == 'kv4' and k_cache is not None and v_cache is not None:
+            n_tokens = k.shape[0]
+            if n_tokens > 0:
+                # Store accepts the token stride of fused-QKV slices directly.
+                store_kv_quant(k.view(n_tokens, self.num_kv_heads, self.head_dim),
+                               v.view(n_tokens, self.num_kv_heads, self.head_dim),
+                               k_cache, v_cache,
+                               ctx.slot_mapping.view(n_tokens),
+                               v_group=self.v_group)
+
+        if ctx.is_prefill:
+            # prefill: attention over the fp16 q/k/v directly (varlen, causal); the KV has
+            #   been quantized into slots above for later decode reads. A prefix-cache hit
+            #   (or an earlier chunked-prefill block) means cu_seqlens_k claims a length
+            #   only the pool holds — flash-attn would silently attend to misaligned rows.
+            #   Materialize the pool-resident prefix and prepend it, so the declared lengths
+            #   finally tell the truth.
+            if ctx.block_tables is not None:
+                k, v = self._materialize_prefix(ctx, k, v)
+            o = flash_attn_varlen_func(
+                q.view(-1, self.num_heads, self.head_dim),
+                k.view(-1, self.num_kv_heads, self.head_dim),
+                v.view(-1, self.num_kv_heads, self.head_dim),
+                cu_seqlens_q=ctx.cu_seqlens_q,
+                cu_seqlens_k=ctx.cu_seqlens_k,
+                max_seqlen_q=ctx.max_seqlen_q,
+                max_seqlen_k=ctx.max_seqlen_k,
+                softmax_scale=self.scale,
+                causal=True,
+            )
+        else:
+            # decode / verify: q is [rows, H, D] — bs rows for decode, bs*M
+            # for a verify forward (M = ctx.verify_m). The cache is int4
+            # packed and the kernel dequantizes tiles on the fly; row m of a
+            # sequence reads keys [0, L+m), so drafts never leak into
+            # earlier rows (their KV sits at higher slot indices).
+            assert k_cache is not None and v_cache is not None
+            o = paged_attention_decode(
+                q, k_cache, v_cache, ctx.block_tables, ctx.context_lens,
+                block_n=self.block_n, num_kv_heads=self.num_kv_heads,
+                k_scale=self.k_cache[1] if k_cache[1].dim() == 2 else None,
+                v_group=self.v_group, verify_m=ctx.verify_m)
+        return o

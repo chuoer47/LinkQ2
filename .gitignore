@@ -1,0 +1,27 @@
+# models & builds
+/models/
+builds/
+*.so
+*.bin
+__pycache__/
+*.egg-info/
+.ipynb_checkpoints/
+
+# cache and temporary files
+.cache/
+.pytest_cache
+
+# generated environments and build artifacts
+third_party/cutlass/
+qslab/kernels/csrc/test_w4a16_gemm
+.venvs/
+.deps/
+
+.conda/
+artifacts/
+datasets/*
+!datasets/.gitkeep
+/results/*
+!/results/.gitkeep
+!/results/README.md
+.tools/

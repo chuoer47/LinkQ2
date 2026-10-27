@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=77.0.3", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qslab"
+version = "0.1.0"
+description = "Single-GPU Qwen3 inference with W4A16, KV4 and speculative decoding"
+readme = "README.md"
+license = "MIT AND Apache-2.0"
+license-files = [
+    "LICENSE",
+    "qslab/kernels/gemlite/LICENSE",
+    "qslab/runtime/LICENSE.nano-vllm",
+]
+requires-python = ">=3.10"
+dependencies = [
+    "torch==2.7.1",
+    "triton==3.3.1; platform_system == 'Linux'",
+    "numpy<2.1",
+    "safetensors",
+    "accelerate>=1.0",
+    "transformers==4.57.6",
+    "tokenizers",
+]
+
+[project.optional-dependencies]
+# service surface only (qslab/api/server.py) — the core stays web-free
+serve = ["aiohttp>=3.9"]
+benchmark = ["nvidia-ml-py"]
+
+[tool.setuptools.packages.find]
+include = ["qslab*", "adapters*"]
+
+[tool.setuptools.package-data]
+"qslab.kernels.gemlite" = ["LICENSE", "README.md"]
+"qslab.runtime" = ["LICENSE.nano-vllm", "UPSTREAM.md"]

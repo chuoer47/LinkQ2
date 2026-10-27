@@ -1,0 +1,183 @@
+"""The acceptance rule behind temperature-aware speculation."""
+# The engine's prefix walk is only correct if a rejected row can never return its own draft
+#   token, which is what rejection_sample provides.
+# These tests pin the rule itself rather than engine output, because losslessness is a
+#   statement about this function's output distribution.
+# The adaptive window policy is a pure function of the recent acceptance history, so it is
+#   exercised through a duck-typed scheduler slice instead of a loaded model.
+from collections import deque
+
+import pytest
+import torch
+
+from qslab.runtime.engine.scheduler import Scheduler
+from qslab.speculation.acceptance import rejection_sample, accepted_prefix
+
+V = 64
+N = 20000
+T = 0.9
+
+
+def _q_from(logits):
+    return torch.softmax(logits / T, dim=-1)
+
+
+def _tv(p, q):
+    return 0.5 * (p - q).abs().sum().item()
+
+
+def _hist(tokens, vocab=V):
+    return torch.bincount(tokens, minlength=vocab).float() / tokens.numel()
+
+
+def _run(logits, temps, drafts, probs, sampled):
+    return rejection_sample(logits, temps, drafts, probs, sampled)
+
+
+def test_ratio_acceptance_reproduces_the_target_distribution():
+    """The output histogram equals the target's q, whatever p proposed."""
+    torch.manual_seed(0)
+    row_logits = torch.randn(V)
+    logits = row_logits.unsqueeze(0).expand(N, V).contiguous()
+    draft_logits = torch.randn(V) * 2.0          # a proposer with a real opinion
+    p = torch.softmax(draft_logits / T, dim=-1)
+    drafts = torch.multinomial(p.unsqueeze(0).expand(N, V).contiguous(), 1).squeeze(1)
+    draft_probs = p.unsqueeze(0).expand(N, V).contiguous()
+    temps = torch.full((N,), T)
+    out = _run(logits, temps, drafts, draft_probs, torch.zeros(N, dtype=torch.long))
+
+    q = _q_from(row_logits)
+    assert _tv(_hist(out), q) < 0.06, "speculated output drifted off the target q"
+    # power check: a rule that simply kept every proposal would score the TV
+    # between p and q here, and that gap has to be big enough to notice
+    assert _tv(p, q) > 0.3, "test setup: p too close to q to detect a bias"
+
+
+def test_one_hot_proposal_is_the_same_rule():
+    """draft_probs=None means p = delta_x: accept with probability q(x)."""
+    # That is the n-gram/lookahead case, and the theorem says it is still exactly q — the
+    #   resample must renormalize q with x's own mass removed.
+    torch.manual_seed(1)
+    row_logits = torch.randn(V)
+    logits = row_logits.unsqueeze(0).expand(N, V).contiguous()
+    q = _q_from(row_logits)
+    # proposals from a third distribution: the rule must not care who proposed
+    drafts = torch.multinomial(torch.softmax(torch.randn(V), 0)
+                               .unsqueeze(0).expand(N, V).contiguous(), 1).squeeze(1)
+    out = _run(logits, torch.full((N,), T), drafts, None,
+               torch.zeros(N, dtype=torch.long))
+    assert _tv(_hist(out), q) < 0.06
+
+
+@pytest.mark.parametrize('proposal_mass', [None, 0.8])
+def test_observed_acceptance_matches_the_probability_ratio(proposal_mass):
+    torch.manual_seed(29)
+    n = 20000
+    q = torch.tensor([0.2, 0.8])
+    p = None if proposal_mass is None else torch.tensor([proposal_mass, 1 - proposal_mass]).expand(n, 2)
+    output = rejection_sample(q.log().expand(n, 2), torch.ones(n),
+        torch.zeros(n, dtype=torch.long), p, torch.zeros(n, dtype=torch.long))
+    # q(0) < p(0), so the residual distribution cannot produce token 0.
+    # Its output frequency therefore measures acceptance, not resampling.
+    expected = 0.2 / (1.0 if proposal_mass is None else proposal_mass)
+    assert abs((output == 0).float().mean().item() - expected) < 0.015
+
+
+def test_rejected_row_never_returns_its_own_draft():
+    """The prefix walk's only requirement on the rule above it."""
+    torch.manual_seed(2)
+    row_logits = torch.full((V,), -20.0)
+    row_logits[3] = 20.0                      # q(7) ~ 0: token 7 must be rejected
+    logits = row_logits.unsqueeze(0).expand(512, V).contiguous()
+    drafts = torch.full((512,), 7, dtype=torch.long)
+    out = _run(logits, torch.full((512,), T), drafts, None,
+               torch.zeros(512, dtype=torch.long))
+    assert not bool((out == 7).any()), "a rejected row came back as its draft"
+    assert _tv(_hist(out, V), _q_from(row_logits)) < 0.02
+
+
+def test_greedy_and_non_speculative_rows_pass_through():
+    """Greedy keeps the plain sample (argmax-equality as always), and so does every row that
+    carries no proposal."""
+    torch.manual_seed(3)
+    logits = torch.randn(4, V)
+    sampled = torch.tensor([5, 6, 7, 8])
+    temps = torch.tensor([1e-6, 1e-6, 0.8, 0.8])
+    drafts = torch.tensor([0, 1, -1, 2])
+    probs = torch.softmax(torch.randn(4, V), dim=-1)
+    out = _run(logits, temps, drafts, probs, sampled)
+    assert out[:3].tolist() == [5, 6, 7], "greedy/padded rows were modified"
+
+
+def test_small_positive_temperature_uses_the_sampling_rule():
+    torch.manual_seed(8)
+    # A temperature of 1e-4 is sampling in the ordinary runtime, not greedy.
+    logits = torch.tensor([0.0, 0.0001]).expand(N, 2).contiguous()
+    out = _run(logits, torch.full((N,), 1e-4), torch.zeros(N, dtype=torch.long),
+               None, torch.zeros(N, dtype=torch.long))
+    expected = torch.softmax(logits[0] / 1e-4, dim=0)
+    assert _tv(_hist(out, 2), expected) < 0.03
+
+
+@pytest.mark.parametrize('drafts,verified,tokens,count', [
+    ([4, 5], [4, 5, 6], [4, 5, 6], 2),
+    ([4, 5], [4, 9, 6], [4, 9], 1),
+    ([4, 5], [9, 5, 6], [9], 0),
+    ([], [9], [9], 0),
+])
+def test_acceptance_commits_only_the_contiguous_prefix(drafts, verified, tokens, count):
+    assert accepted_prefix(drafts, verified) == (tokens, count)
+
+
+
+
+class _SchedSlice:
+    """The four attributes _adapt_gamma reads/writes, no model on disk."""
+    gamma = 4
+    _adapt_gamma = Scheduler._adapt_gamma
+
+    def __init__(self):
+        self._recent = deque(maxlen=4)
+        self.proposal_gamma = self.gamma
+
+
+def _drive(hist):
+    s = _SchedSlice()
+    seen = []
+    for a in hist:
+        s._recent.append(a)
+        s._adapt_gamma()
+        seen.append(s.proposal_gamma)
+    return seen
+
+
+def test_adaptive_gamma_shrinks_and_never_grows_back():
+    assert _drive([0.0, 0.0, 0.0])[-1] == 2, "a window that lands nothing must halve"
+    # Regrowth is deliberately absent, so these drives assert the ratchet: acceptance is
+    #   prefix-based, and a round that lands 2/2 after a halve carries no information about
+    #   a 3rd or 4th draft. A cut window costs nothing to keep either, since the proposer
+    #   loop still runs at configured gamma.
+    assert _drive([0.0, 0.0, 0.0, 2.0, 2.0, 2.0])[-1] == 2, "halving is one-way"
+    assert _drive([0.0, 0.0, 0.0, 4.0, 4.0, 4.0])[-1] == 2
+    # the ceiling is the configured gamma: M is baked into the verify graph
+    # family, so adaptation may only spend fewer draft forwards
+    assert _drive([4.0] * 6)[-1] == 4
+
+
+def test_adaptive_window_is_a_false_positive_filter():
+    """WINDOW is not a reaction-speed knob — gamma//2 is an idempotent target."""
+    # So the window only changes when the one irreversible cut lands, which is why a single
+    #   bad round among three must not fire it.
+    assert _drive([4.0, 4.0, 1.0])[-1] == 4, "one bad round among three is not a trend"
+    assert _drive([1.0, 1.0, 1.0])[-1] == 2, "three rounds at break-even must cut"
+
+
+def test_adaptive_gamma_never_reaches_zero():
+    """gamma=1 is still a speculation round; 0 would divide by zero upstream."""
+    assert _drive([0.0] * 6)[-1] >= 1
+    s = _SchedSlice()
+    s.gamma = 1
+    s.proposal_gamma = 1
+    s._recent.append(0.0)
+    s._adapt_gamma()
+    assert s.proposal_gamma == 1

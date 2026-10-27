@@ -1,0 +1,351 @@
+"""L4 service surface: an OpenAI-compatible HTTP front end over the runtime."""
+from __future__ import annotations
+
+import asyncio
+import json
+import queue
+import threading
+import time
+import uuid
+from dataclasses import dataclass
+
+from qslab.api.options import add_model_options, model_options
+from qslab.runtime.sampling_params import GREEDY
+
+DEFAULT_MAX_TOKENS = 128
+
+
+@dataclass
+class Job:
+    """One in-flight completion, as the pump sees it."""
+    job_id: str
+    prompt: list[int]
+    max_tokens: int = DEFAULT_MAX_TOKENS
+    temperature: float = GREEDY
+    seq: object = None
+    sent: int = 0                       # completion tokens already handed out
+    out_q: asyncio.Queue | None = None
+    loop: asyncio.AbstractEventLoop | None = None
+
+    def publish(self, item) -> None:
+        if self.out_q is None:
+            return
+        self.loop.call_soon_threadsafe(self.out_q.put_nowait, item)
+
+
+class EnginePump:
+    """Drives one LLMEngine on a private thread and fans out token deltas."""
+
+    def __init__(self, engine):
+        self.eng = engine
+        self.jobs: dict[str, Job] = {}
+        self._inbox: queue.Queue[Job | str | None] = queue.Queue()
+        self.error: str | None = None
+        self._stop = threading.Event()
+        self._submit_lock = threading.Lock()
+        self._thread = threading.Thread(target=self._loop, daemon=True,
+                                        name="qslab-pump")
+        self._thread.start()
+
+    # ------------------------------------------------------------------ callers
+    def attach(self, job: Job) -> asyncio.Queue:
+        """Bind a job to the calling event loop before submitting it."""
+        q: asyncio.Queue = asyncio.Queue()
+        job.out_q = q
+        job.loop = asyncio.get_running_loop()
+        return q
+
+    def submit(self, job: Job) -> Job:
+        # The same lock protects shutdown and submission: no job can land
+        # behind the final error fanout and wait forever.
+        with self._submit_lock:
+            if self._stop.is_set():
+                raise RuntimeError(self.error or 'engine pump is closed')
+            self._inbox.put(job)
+        return job
+
+    def cancel(self, job_id: str):
+        self._inbox.put(job_id)
+
+    def close(self) -> None:
+        with self._submit_lock:
+            self._stop.set()
+            self._inbox.put(None)
+        self._thread.join()
+
+    # ------------------------------------------------------------------ pump thread
+    def _register(self, job: Job) -> None:
+        from qslab.runtime.sampling_params import SamplingParams
+        job.seq = self.eng.add_request(
+            prompt=job.prompt,
+            sampling_params=SamplingParams(temperature=job.temperature,
+                                           max_tokens=job.max_tokens))
+        self.jobs[job.job_id] = job
+
+    def _drain(self, blocking: bool = False) -> bool:
+        """Submit everything waiting in the inbox; False when asked to stop."""
+        while True:
+            try:
+                job = self._inbox.get() if blocking else self._inbox.get_nowait()
+            except queue.Empty:
+                return True
+            if job is None:
+                return False
+            if isinstance(job, str):
+                cancelled = self.jobs.pop(job, None)
+                if cancelled is not None:
+                    self.eng.abort_request(cancelled.seq.seq_id)
+            else:
+                try:
+                    self._register(job)
+                except ValueError as exc:
+                    job.publish({'error': str(exc), 'status': 400})
+            blocking = False
+
+    def _fanout(self) -> None:
+        outputs, _ = self.eng.step()
+        for job_id in list(self.jobs):
+            job = self.jobs[job_id]
+            n = len(job.seq.completion_token_ids)
+            if n > job.sent:
+                delta = self.eng.tokenizer.decode(
+                    job.seq.completion_token_ids[job.sent:n])
+                job.publish({"delta": delta, "tokens": n - job.sent,
+                             "finish": None})
+                job.sent = n
+            if job.seq.is_finished:
+                # `length` when the budget cut it off, `stop` when EOS did
+                job.publish({"delta": "", "tokens": 0,
+                             "finish": job.seq.finish_reason,
+                             "completion_tokens": job.sent,
+                             "prompt_tokens": job.seq.num_prompt_tokens})
+                del self.jobs[job_id]
+
+    def _loop(self) -> None:
+        try:
+            while not self._stop.is_set():
+                if not self._drain():
+                    return
+                if self.eng.is_finished():
+                    if not self._drain(blocking=True):
+                        return
+                    continue
+                self._fanout()
+        except Exception as exc:
+            self.error = str(exc)
+        finally:
+            with self._submit_lock:
+                self._stop.set()
+            for job in self.jobs.values():
+                self.eng.abort_request(job.seq.seq_id, reason='error' if self.error else 'cancelled')
+                job.publish({'error': self.error or 'engine pump closed', 'status': 503})
+            self.jobs.clear()
+            while not self._inbox.empty():
+                item = self._inbox.get_nowait()
+                if isinstance(item, Job):
+                    item.publish({'error': self.error or 'engine pump closed', 'status': 503})
+
+
+# ---------------------------------------------------------------------- HTTP wire
+def _reply(model: str, text: str, finish: str, n_prompt: int, n_completion: int) -> dict:
+    return {
+        "id": "chatcmpl-" + uuid.uuid4().hex[:8],
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": model,
+        "choices": [{"index": 0,
+                     "message": {"role": "assistant", "content": text},
+                     "finish_reason": finish}],
+        "usage": {"prompt_tokens": n_prompt, "completion_tokens": n_completion,
+                  "total_tokens": n_prompt + n_completion},
+    }
+
+
+def _chunk(model: str, cid: str, delta: str, finish: str | None) -> dict:
+    return {"id": cid, "object": "chat.completion.chunk", "created": int(time.time()),
+            "model": model,
+            "choices": [{"index": 0, "delta": {"content": delta},
+                         "finish_reason": finish}]}
+
+
+def _bad_request(msg: str):
+    from aiohttp import web
+    return web.json_response({"error": {"message": msg, "type": "invalid_request"}},
+                             status=400)
+
+
+def create_app(llm, *, model_name: str | None = None, max_tokens_cap: int = 4096):
+    """Build the aiohttp app over an LLM facade or a raw LLMEngine."""
+    from aiohttp import web
+
+    engine = getattr(llm, "engine", llm)
+    pump = EnginePump(engine)
+    tok = engine.tokenizer
+    name = model_name or getattr(llm, "model_path", "qslab")
+    # the scheduler clamps max_model_len against the rope ceiling, so it is the
+    # only honest ceiling to validate input against
+    ceiling = getattr(getattr(engine, "scheduler", None), "max_model_len", None)
+
+    def render(body: dict) -> tuple[list[int], int, float, bool] | str:
+        if not isinstance(body, dict):
+            return "body must be a JSON object"
+        try:
+            raw_mt = body.get("max_tokens")
+            # explicit None test: `or DEFAULT` would swallow a literal 0
+            max_tokens = DEFAULT_MAX_TOKENS if raw_mt is None else int(raw_mt)
+        except (TypeError, ValueError):
+            return "max_tokens must be an integer"
+        if not 1 <= max_tokens <= max_tokens_cap:
+            return f"max_tokens must be in 1..{max_tokens_cap}"
+        temp = body.get("temperature")
+        temperature = GREEDY if temp is None or float(temp) <= 0 else float(temp)
+        stream = bool(body.get("stream"))
+        if "messages" in body:
+            if not isinstance(body["messages"], list) or not body["messages"]:
+                return "messages must be a non-empty list"
+            template = dict(tokenize=False, add_generation_prompt=True)
+            if getattr(engine, 'spec_method', None) == 'dflash':
+                template['enable_thinking'] = False
+            text = tok.apply_chat_template(body["messages"], **template)
+            ids = tok.encode(text)
+        elif "prompt" in body:
+            raw = body["prompt"]
+            ids = tok.encode(raw) if isinstance(raw, str) else list(raw)
+        else:
+            return "needs either 'messages' or 'prompt'"
+        if not ids:
+            return "empty prompt"
+        if ceiling and len(ids) >= ceiling:
+            return f"prompt of {len(ids)} tokens leaves no room under max_model_len={ceiling}"
+        return ids, max_tokens, temperature, stream
+
+    async def completions(request):
+        try:
+            body = await request.json()
+        except json.JSONDecodeError:
+            return _bad_request("body is not JSON")
+        rendered = render(body)
+        if isinstance(rendered, str):
+            return _bad_request(rendered)
+        ids, max_tokens, temperature, stream = rendered
+
+        job = Job(job_id=uuid.uuid4().hex, prompt=ids, max_tokens=max_tokens,
+                  temperature=temperature)
+        q = pump.attach(job)
+        try:
+            pump.submit(job)
+        except RuntimeError as exc:
+            return web.json_response({'error': {'message': str(exc)}}, status=503)
+
+        async def next_event():
+            while True:
+                if request.transport is None or request.transport.is_closing():
+                    raise ConnectionResetError('client disconnected')
+                try:
+                    return await asyncio.wait_for(q.get(), timeout=0.25)
+                except asyncio.TimeoutError:
+                    continue
+
+        try:
+            # Await registration before opening SSE, so admission errors can
+            # still be returned as ordinary HTTP errors.
+            ev = await next_event()
+            if 'error' in ev:
+                return web.json_response({'error': {'message': ev['error']}}, status=ev['status'])
+            if not stream:
+                parts = []
+                while True:
+                    if 'error' in ev:
+                        return web.json_response({'error': {'message': ev['error']}}, status=ev['status'])
+                    parts.append(ev['delta'])
+                    if ev['finish']:
+                        return web.json_response(_reply(name, ''.join(parts), ev['finish'],
+                            ev['prompt_tokens'], ev['completion_tokens']))
+                    ev = await next_event()
+
+            cid = 'chatcmpl-' + uuid.uuid4().hex[:8]
+            resp = web.StreamResponse(headers={'Content-Type': 'text/event-stream',
+                                               'Cache-Control': 'no-cache'})
+            await resp.prepare(request)
+            while True:
+                payload = ({'error': {'message': ev['error']}} if 'error' in ev else
+                           _chunk(name, cid, ev['delta'], ev['finish']))
+                await resp.write(b'data: ' + json.dumps(payload).encode() + b'\n\n')
+                if 'error' in ev or ev['finish']:
+                    break
+                ev = await next_event()
+            await resp.write(b'data: [DONE]\n\n')
+            await resp.write_eof()
+            return resp
+        finally:
+            pump.cancel(job.job_id)
+
+    async def health(request):
+        return web.json_response({"status": "error" if pump.error else "ok", "model": name,
+                                  "active_requests": len(pump.jobs)}, status=503 if pump.error else 200)
+
+    async def models(request):
+        return web.json_response({"object": "list",
+                                  "data": [{"id": name, "object": "model",
+                                            "owned_by": "qslab"}]})
+
+    app = web.Application()
+    app["pump"] = pump
+    app["engine"] = engine
+    app.router.add_get("/health", health)
+    app.router.add_get("/v1/models", models)
+    app.router.add_post("/v1/chat/completions", completions)
+    app.router.add_post("/v1/completions", completions)
+    async def cleanup(_app):
+        await asyncio.to_thread(pump.close)
+    app.on_cleanup.append(cleanup)
+    return app
+
+
+def build_parser():
+    import argparse
+    p = argparse.ArgumentParser(prog="python -m qslab.api.server",
+                                description="OpenAI-compatible server over the qslab runtime")
+    p.add_argument("--model", required=True)
+    add_model_options(p)
+    p.add_argument("--cuda-graph", action='store_true')
+    p.add_argument("--chunked-prefill", action='store_true')
+    p.add_argument("--max-num-batched-tokens", type=int, default=16384)
+    p.add_argument("--device", default=None, help="e.g. cuda:3 (sets CUDA_VISIBLE_DEVICES)")
+    p.add_argument("--host", default="127.0.0.1")
+    p.add_argument("--port", type=int, default=8000)
+    p.add_argument("--max-num-seqs", type=int, default=32)
+    p.add_argument("--max-model-len", type=int, default=4096)
+    p.add_argument("--util", type=float, default=0.9)
+    return p
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
+
+    if args.device:
+        # must happen before torch touches the GPU — after that the device list
+        # is already frozen (same reason api/cli.py puts it before its imports)
+        import os
+        os.environ["CUDA_VISIBLE_DEVICES"] = args.device.rsplit(":", 1)[-1]
+    try:
+        import aiohttp  # noqa: F401
+    except ImportError:
+        raise SystemExit("the service surface needs the optional extra: pip install -e .[serve]")
+
+    from aiohttp import web
+    from qslab.api.llm import LLM
+    llm = LLM(args.model, **model_options(args), max_num_seqs=args.max_num_seqs,
+              enforce_eager=not args.cuda_graph,
+              enable_chunked_prefill=args.chunked_prefill,
+              max_num_batched_tokens=args.max_num_batched_tokens,
+              max_model_len=args.max_model_len, gpu_memory_utilization=args.util)
+    try:
+        web.run_app(create_app(llm, model_name=args.model), host=args.host, port=args.port,
+                    handler_cancellation=True)
+    finally:
+        llm.close()
+
+
+if __name__ == "__main__":
+    main()
